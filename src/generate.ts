@@ -154,7 +154,7 @@ function ensureOutDir(dir: string): void {
 
 function missingKeyError(provider: ProviderConfig): ConfigError {
   // The hint must be a command that runs: login takes the provider as a flag.
-  const hints = [`run "media login --provider ${provider.name}"`];
+  const hints = [`run "mediagen login --provider ${provider.name}"`];
   if (provider.api_key_env) hints.push(`set ${provider.api_key_env}`);
   hints.push("pass --api-key");
   return new ConfigError(

@@ -20,7 +20,7 @@ function thrownBy(action: () => unknown): Error {
 }
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "media-util-"));
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-util-"));
 });
 
 afterEach(() => {

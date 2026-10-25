@@ -144,7 +144,7 @@ function missingQwenEndpointMessage(
   return [
     `${provider.name} API request failed with status ${status}: this endpoint does not exist on ${host}.`,
     `The OpenAI-compatible images API is served only on your workspace-scoped Bailian host, ${QWEN_WORKSPACE_BASE_URL}.`,
-    `Fix it with: media login --provider ${provider.name} --base-url ${QWEN_WORKSPACE_BASE_URL}`,
+    `Fix it with: mediagen login --provider ${provider.name} --base-url ${QWEN_WORKSPACE_BASE_URL}`,
     `or base_url = "${QWEN_WORKSPACE_BASE_URL}" under [providers.${provider.name}] in config.toml, then run the command again.`,
   ].join("\n");
 }

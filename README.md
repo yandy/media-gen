@@ -1,8 +1,13 @@
-# media
+# mediagen
 
-A small, non-interactive command line tool that generates and edits images
-through Alibaba Bailian (**qwen**) and Volcengine Ark (**doubao / seedream**),
-downloads the results to disk, and prints their paths.
+`mediagen` (`@yandy0725/mediagen-cli` on npm) is a small, non-interactive
+command line tool that generates and edits images through Alibaba Bailian
+(**qwen**) and Volcengine Ark (**doubao / seedream**), downloads the results to
+disk, and prints their paths.
+
+```bash
+npm install -g @yandy0725/mediagen-cli
+```
 
 It is built for AI agents: explicit flags, no interactive prompts (except the
 optional hidden API-key prompt in `login`), machine-readable output with
@@ -11,7 +16,7 @@ copy-pasteable examples.
 
 ```console
 # qwen: after the one-time base_url step below (ark needs no such step)
-$ media image generate "a red fox in fresh snow, soft morning light" --out-dir ./out
+$ mediagen image generate "a red fox in fresh snow, soft morning light" --out-dir ./out
 /abs/path/out/qwen-qwen-image-3-0-20261025-020839-0.png
 ```
 
@@ -23,7 +28,7 @@ serves that endpoint only on your **workspace-scoped** host, so configure it onc
 (the workspace id is in the Bailian console):
 
 ```bash
-media login --provider qwen --base-url https://<workspace-id>.cn-beijing.maas.aliyuncs.com
+mediagen login --provider qwen --base-url https://<workspace-id>.cn-beijing.maas.aliyuncs.com
 ```
 
 or, equivalently, in `config.toml`:
@@ -37,16 +42,16 @@ There is no environment variable for the host, so a key alone is not enough for
 qwen. `ark` is unaffected — its built-in host is correct. If you do call qwen
 without the host, the failure is not silent: the error explains that the
 endpoint does not exist on the configured host and prints the exact
-`media login --provider qwen --base-url ...` command above.
+`mediagen login --provider qwen --base-url ...` command above.
 
 ## What it is
 
-- `media image generate <prompt>` — text-to-image, and image-to-image when you
+- `mediagen image generate <prompt>` — text-to-image, and image-to-image when you
   add one or more `--image` references.
-- `media image edit <prompt>` — the same command with `--image` required.
-- `media login` / `media logout` / `media auth status` — API keys, stored in
+- `mediagen image edit <prompt>` — the same command with `--image` required.
+- `mediagen login` / `mediagen logout` / `mediagen auth status` — API keys, stored in
   `auth.json` with mode `600`, never printed in full.
-- `media config show` / `media config path` — the resolved configuration, with
+- `mediagen config show` / `mediagen config path` — the resolved configuration, with
   a source note per value.
 
 It is deliberately not a platform toolbox: image generation only (no video, no
@@ -65,31 +70,42 @@ dependencies, and no automatic retry of a paid request.
 
 ## Install
 
+The package is `@yandy0725/mediagen-cli` and the command it installs is
+`mediagen`:
+
 ```bash
-git clone <this repository> media-cli
-cd media-cli
-npm install        # commander + smol-toml
-npm run build      # tsup -> dist/cli.js
-npm link           # puts `media` on your PATH
-media --help
+npm install -g @yandy0725/mediagen-cli
+mediagen --help
 ```
 
-Without installing, run it from the repository:
+Or without a global install:
 
 ```bash
+npx @yandy0725/mediagen-cli --help
+```
+
+From a checkout, for development:
+
+```bash
+git clone https://github.com/yandy/mediagen-cli && cd mediagen-cli
+npm install        # commander + smol-toml
+npm run build      # tsup -> dist/cli.js
+npm link           # puts `mediagen` on your PATH
+mediagen --help
+
 node dist/cli.js --help       # after npm run build
 npx tsx src/cli.ts --help     # straight from the sources
 ```
 
-## First run: `media login`
+## First run: `mediagen login`
 
 ```bash
-media login --provider qwen --api-key sk-...   # store a key in auth.json (mode 600)
-media login --provider qwen --base-url https://<workspace-id>.cn-beijing.maas.aliyuncs.com
+mediagen login --provider qwen --api-key sk-...   # store a key in auth.json (mode 600)
+mediagen login --provider qwen --base-url https://<workspace-id>.cn-beijing.maas.aliyuncs.com
                                                # required for qwen: its built-in host 404s
-media login --provider ark                     # no --api-key: prompt, hidden input (needs a TTY)
-media login --provider ark --base-url https://proxy.example.com   # any endpoint override; stores no key
-media auth status                              # which key each provider would use, masked
+mediagen login --provider ark                     # no --api-key: prompt, hidden input (needs a TTY)
+mediagen login --provider ark --base-url https://proxy.example.com   # any endpoint override; stores no key
+mediagen auth status                              # which key each provider would use, masked
 ```
 
 qwen needs two things — a key **and** the workspace `base_url`; ark needs only a
@@ -97,76 +113,76 @@ key. `--base-url` on its own rewrites `config.toml` and stores no key.
 
 `login` only stores keys and `base_url` overrides; it never creates a provider.
 Provider definitions (`api_type` / `base_url` / `model`) live in `config.toml`,
-so `media login --provider my-proxy` fails until `[providers.my-proxy]` exists.
+so `mediagen login --provider my-proxy` fails until `[providers.my-proxy]` exists.
 
 Environment variables work instead of `login` (`DASHSCOPE_API_KEY` for `qwen`,
 `ARK_API_KEY` for `ark`), and `--api-key` on a single command overrides both.
 The host is a different matter: no environment variable sets it, so qwen still
-needs its workspace `base_url` from `media login --provider qwen --base-url ...`
+needs its workspace `base_url` from `mediagen login --provider qwen --base-url ...`
 or `config.toml`.
 
 ## Quickstart
 
 ```bash
 # 0. one-time: point qwen at your workspace host (ark needs no such step)
-media login --provider qwen --base-url https://<workspace-id>.cn-beijing.maas.aliyuncs.com
+mediagen login --provider qwen --base-url https://<workspace-id>.cn-beijing.maas.aliyuncs.com
 
 # 1. text to image with the default provider (qwen, once its base_url is set)
-media image generate "a red fox in fresh snow, soft morning light" --size 1024x1024 --out-dir ./out
+mediagen image generate "a red fox in fresh snow, soft morning light" --size 1024x1024 --out-dir ./out
 
 # 2. edit a local image; local paths are read and sent as base64 data URLs
-media image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider qwen
+mediagen image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider qwen
 
 # 3. combine several references: repeat --image
-media image edit "the character from the first image wearing the jacket from the second" \
+mediagen image edit "the character from the first image wearing the jacket from the second" \
   --image ./character.png --image ./jacket.png --provider qwen
 
 # 4. four ark variants as JSON, for a program (or an agent) to parse
-media image generate "minimalist logo for a coffee roastery" --provider ark --n 4 --seed 42 --json
+mediagen image generate "minimalist logo for a coffee roastery" --provider ark --n 4 --seed 42 --json
 
 # 5. a third-party proxy declared as [providers.my-proxy] in config.toml
-media image generate "product photo on a white background" --provider my-proxy --out-dir ./shots
+mediagen image generate "product photo on a white background" --provider my-proxy --out-dir ./shots
 ```
 
-`media image generate --help` and `media image edit --help` print the full flag
+`mediagen image generate --help` and `mediagen image edit --help` print the full flag
 list, the model table, the size reference and more examples.
 
 ## Commands
 
 | command | what it does |
 |---|---|
-| `media image generate <prompt>` | generate an image; add `--image` to edit |
-| `media image edit <prompt>` | identical, but at least one `--image` is required |
-| `media login [--provider P] [--api-key K] [--base-url U] [--json]` | store a key and/or a `base_url` override |
-| `media logout [--provider P] [--json]` | remove the stored key for a provider |
-| `media auth status [--json]` | which key each provider would use, and where it came from |
-| `media config show [--json]` | the effective configuration, with a source note per value |
-| `media config path [--json]` | where `config.toml` (and `auth.json`) live |
+| `mediagen image generate <prompt>` | generate an image; add `--image` to edit |
+| `mediagen image edit <prompt>` | identical, but at least one `--image` is required |
+| `mediagen login [--provider P] [--api-key K] [--base-url U] [--json]` | store a key and/or a `base_url` override |
+| `mediagen logout [--provider P] [--json]` | remove the stored key for a provider |
+| `mediagen auth status [--json]` | which key each provider would use, and where it came from |
+| `mediagen config show [--json]` | the effective configuration, with a source note per value |
+| `mediagen config path [--json]` | where `config.toml` (and `auth.json`) live |
 
-There is no `--version` flag; `media --help` lists the commands.
+There is no `--version` flag; `mediagen --help` lists the commands.
 
 ## Configuration
 
 Config directory, in precedence order:
 
-1. `$MEDIA_CLI_CONFIG_DIR`
-2. `$XDG_CONFIG_HOME/media-cli`
-3. `~/.config/media-cli`
+1. `$MEDIAGEN_CLI_CONFIG_DIR`
+2. `$XDG_CONFIG_HOME/mediagen-cli`
+3. `~/.config/mediagen-cli`
 
 It holds `config.toml` (optional for `ark`; for `qwen` it must carry the
 workspace `base_url`, see
 [Before your first qwen call](#before-your-first-qwen-call)) and `auth.json`
-(written by `login` with mode `600`, in a directory `media` creates with mode
+(written by `login` with mode `600`, in a directory `mediagen` creates with mode
 `700`).
 
-`media config path` prints the path of `config.toml` (and, with `--json`, that of
-`auth.json` too); `media config show` prints every value with its source
+`mediagen config path` prints the path of `config.toml` (and, with `--json`, that of
+`auth.json` too); `mediagen config show` prints every value with its source
 (`built-in`, `config.toml`, or `default`).
 
 ### `config.toml` reference
 
 ```toml
-# ~/.config/media-cli/config.toml
+# ~/.config/mediagen-cli/config.toml
 default_provider = "qwen"        # provider used when --provider is omitted
 output_dir = "./media-output"    # where images are written; --out-dir wins
 
@@ -204,7 +220,7 @@ api_key_env = "MY_PROXY_KEY"     # optional: provider-specific env var holding t
 A built-in provider (`qwen`, `ark`) may be partially overridden — any field you
 omit keeps its built-in value, except that qwen's built-in `base_url` does not
 serve the images API and must be overridden with your workspace host. A name
-that is not built-in must define `api_type`, `base_url` and `model`, or `media`
+that is not built-in must define `api_type`, `base_url` and `model`, or `mediagen`
 reports the missing fields instead of sending a request.
 
 ## API key resolution
@@ -217,7 +233,7 @@ Highest precedence first:
 3. for a built-in provider name, its conventional variable — `qwen` →
    `DASHSCOPE_API_KEY`, `ark` → `ARK_API_KEY` — even when `api_key_env` was
    overridden to something else;
-4. the key stored in `auth.json` by `media login`.
+4. the key stored in `auth.json` by `mediagen login`.
 
 When none of them yields a key, the command exits `1` and names all three ways
 to supply one. Keys are only ever displayed masked — the first and last four
@@ -233,8 +249,8 @@ host to configure and the exact command to do it with.
 
 | variable | effect |
 |---|---|
-| `MEDIA_CLI_CONFIG_DIR` | the whole config directory (`config.toml` + `auth.json`); wins over `XDG_CONFIG_HOME` |
-| `XDG_CONFIG_HOME` | config directory becomes `$XDG_CONFIG_HOME/media-cli` |
+| `MEDIAGEN_CLI_CONFIG_DIR` | the whole config directory (`config.toml` + `auth.json`); wins over `XDG_CONFIG_HOME` |
+| `XDG_CONFIG_HOME` | config directory becomes `$XDG_CONFIG_HOME/mediagen-cli` |
 | `DASHSCOPE_API_KEY` | API key for the built-in `qwen` provider — the key alone is not enough: qwen also needs a workspace `base_url` (see [Before your first qwen call](#before-your-first-qwen-call)) |
 | `ARK_API_KEY` | API key for the built-in `ark` provider |
 | `NODE_USE_ENV_PROXY` | set to `1` on Node >= 24 to route `fetch` through `HTTP_PROXY`/`HTTPS_PROXY` (see [Proxies](#proxies-and-timeouts)) |
@@ -341,10 +357,10 @@ costs anything. Paid requests are never retried automatically.
 
 ## Proxies and timeouts
 
-`media` talks to the vendors with the built-in `fetch` and has no proxy flags of
+`mediagen` talks to the vendors with the built-in `fetch` and has no proxy flags of
 its own. On Node >= 24, set `NODE_USE_ENV_PROXY=1` to make `fetch` honour
 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`. Alternatively point a provider's
-`base_url` (in `config.toml`, or with `media login --base-url`, or with the
+`base_url` (in `config.toml`, or with `mediagen login --base-url`, or with the
 `--base-url` flag for one call) at your own relay.
 
 Timeouts: 300 s per API request (generation takes 10-120 s) and 120 s per image
@@ -352,17 +368,17 @@ download.
 
 ## Agent skill
 
-The package ships [`skills/media-cli/SKILL.md`](skills/media-cli/SKILL.md): a
-thin routing skill that tells an agent when to reach for `media`, the three
+The package ships [`skills/mediagen/SKILL.md`](skills/mediagen/SKILL.md): a
+thin routing skill that tells an agent when to reach for `mediagen`, the three
 commands that cover most requests, and the model trade-offs. Copy it into your
 harness's skills directory, for example:
 
 ```bash
-cp -r skills/media-cli ~/.agents/skills/     # the portable Agent Skills location
-cp -r skills/media-cli ~/.pi/agent/skills/   # pi
+cp -r skills/mediagen ~/.agents/skills/     # the portable Agent Skills location
+cp -r skills/mediagen ~/.pi/agent/skills/   # pi
 ```
 
-Everything the skill does not cover is in `media image generate --help`.
+Everything the skill does not cover is in `mediagen image generate --help`.
 
 ## Development
 

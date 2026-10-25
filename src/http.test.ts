@@ -418,7 +418,7 @@ describe("callImageApi: a 404 with an empty body", () => {
     expect(error.message).toContain("404");
     expect(error.message).toContain("dashscope.aliyuncs.com");
     expect(error.message).toContain("maas.aliyuncs.com");
-    expect(error.message).toContain("media login --provider qwen --base-url");
+    expect(error.message).toContain("mediagen login --provider qwen --base-url");
     expect(error.message).toContain("base_url");
     expect(error.message).not.toContain(API_KEY);
   });
@@ -435,7 +435,7 @@ describe("callImageApi: a 404 with an empty body", () => {
     );
 
     expect(error.message).toContain("relay.example.com");
-    expect(error.message).toContain("media login --provider my-qwen --base-url");
+    expect(error.message).toContain("mediagen login --provider my-qwen --base-url");
     expect(error.message).toContain("maas.aliyuncs.com");
   });
 

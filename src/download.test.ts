@@ -15,7 +15,7 @@ let tempDir: string;
 let outDir: string;
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "media-download-"));
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-download-"));
   outDir = path.join(tempDir, "out");
 });
 

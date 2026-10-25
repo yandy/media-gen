@@ -17,3 +17,6 @@ coverage/
 .DS_Store
 .pi/
 docs/superpowers/plans/
+
+# npm pack output
+*.tgz

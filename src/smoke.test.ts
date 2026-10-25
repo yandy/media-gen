@@ -23,7 +23,7 @@ const IMAGE_BYTES = Buffer.from([
 ]);
 
 const TRACKED_ENV = [
-  "MEDIA_CLI_CONFIG_DIR",
+  "MEDIAGEN_CLI_CONFIG_DIR",
   "XDG_CONFIG_HOME",
   "DASHSCOPE_API_KEY",
   "ARK_API_KEY",
@@ -46,7 +46,7 @@ let originalEnv: Record<string, string | undefined> = {};
 /** The only environment the CLI may see; keys are fake and scoped to this run. */
 function smokeEnv(): NodeJS.ProcessEnv {
   return {
-    MEDIA_CLI_CONFIG_DIR: configDir,
+    MEDIAGEN_CLI_CONFIG_DIR: configDir,
     DASHSCOPE_API_KEY: QWEN_KEY,
     ARK_API_KEY: ARK_KEY,
   };
@@ -60,7 +60,7 @@ function collectInto(sink: string[]): typeof process.stdout.write {
 }
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "media-smoke-"));
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-smoke-"));
   configDir = path.join(tempDir, "config");
   outDir = path.join(tempDir, "out");
   fs.mkdirSync(configDir, { recursive: true });
@@ -144,7 +144,7 @@ function stderr(): string {
   return errChunks.join("");
 }
 
-describe("smoke: media image generate (qwen, text to image)", () => {
+describe("smoke: mediagen image generate (qwen, text to image)", () => {
   it("saves one file and prints the JSON envelope with exit code 0", async () => {
     const calls = stubFetch(() => apiOk([{ url: IMAGE_URL }], { image_count: 1 }));
 
@@ -193,7 +193,7 @@ describe("smoke: media image generate (qwen, text to image)", () => {
   });
 });
 
-describe("smoke: media image edit (ark, one local PNG)", () => {
+describe("smoke: mediagen image edit (ark, one local PNG)", () => {
   it("sends the local file as a base64 data URL in exactly one request", async () => {
     const png = path.join(tempDir, "input.png");
     fs.writeFileSync(png, IMAGE_BYTES);

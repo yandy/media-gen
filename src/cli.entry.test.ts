@@ -1,6 +1,6 @@
 /**
  * Regression coverage for the *packaged* entry point: `dist/cli.js` as npm
- * installs it, reached through the symlink that `bin.media` creates.
+ * installs it, reached through the symlink that `bin.mediagen` creates.
  *
  * `src/cli.test.ts` drives `main()` in-process, which never executes the shebang,
  * the invoked-as-script guard, the argv slicing or the `process.exit` wiring. This
@@ -24,7 +24,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
 const srcDir = path.join(repoRoot, "src");
-/** What `package.json` `bin.media` points at, i.e. the file npm symlinks into `.bin`. */
+/** What `package.json` `bin.mediagen` points at, i.e. the file npm symlinks into `.bin`. */
 const entry = path.join(repoRoot, "dist", "cli.js");
 
 const SPAWN_TIMEOUT_MS = 30_000;
@@ -86,7 +86,7 @@ function expectRan(result: SpawnSyncReturns<string>): void {
 
 let tempDir: string;
 let configDir: string;
-/** A symlink to `entry`, standing in for the `media` binary npm creates. */
+/** A symlink to `entry`, standing in for the `mediagen` binary npm creates. */
 let link: string;
 let env: NodeJS.ProcessEnv;
 
@@ -96,15 +96,15 @@ beforeAll(() => {
 
 beforeEach(() => {
   // realpath so the expected config path matches even where /tmp is itself a link.
-  tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "media-entry-")));
+  tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-entry-")));
   configDir = path.join(tempDir, "config");
   fs.mkdirSync(configDir, { recursive: true });
 
-  link = path.join(tempDir, "bin", "media");
+  link = path.join(tempDir, "bin", "mediagen");
   fs.mkdirSync(path.dirname(link), { recursive: true });
   fs.symlinkSync(entry, link);
 
-  env = { ...process.env, MEDIA_CLI_CONFIG_DIR: configDir };
+  env = { ...process.env, MEDIAGEN_CLI_CONFIG_DIR: configDir };
   delete env.XDG_CONFIG_HOME;
 });
 
@@ -158,7 +158,7 @@ describe("packaged entry point", () => {
     expect(fs.readFileSync(entry, "utf8").startsWith("#!/usr/bin/env node")).toBe(true);
     expect(fs.statSync(entry).mode & 0o111).not.toBe(0);
 
-    // No `node` prefix: the kernel resolves the shebang, exactly like `media config path`.
+    // No `node` prefix: the kernel resolves the shebang, exactly like `mediagen config path`.
     const result = spawnSync(link, ["config", "path"], {
       env,
       encoding: "utf8",
@@ -188,15 +188,15 @@ describe("packaged entry point", () => {
     expectRan(result);
     expect(result.stdout.trim()).toBe("imported-without-running");
     expect(result.stdout).not.toContain("config.toml");
-    expect(result.stdout).not.toContain("Usage: media");
+    expect(result.stdout).not.toContain("Usage: mediagen");
   });
 
-  it("is the file package.json publishes as the media binary", () => {
+  it("is the file package.json publishes as the mediagen binary", () => {
     const pkg = JSON.parse(
       fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"),
     ) as { bin: Record<string, string> };
 
-    expect(pkg.bin.media).toBe("./dist/cli.js");
-    expect(path.resolve(repoRoot, pkg.bin.media)).toBe(entry);
+    expect(pkg.bin.mediagen).toBe("./dist/cli.js");
+    expect(path.resolve(repoRoot, pkg.bin.mediagen)).toBe(entry);
   });
 });

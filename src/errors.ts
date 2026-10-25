@@ -67,8 +67,8 @@ export function malformedDocumentMessage(
 ): string {
   const remedy =
     format === "JSON"
-      ? 'Repair it, or delete it and run "media login --provider <name> --api-key ..." to write a fresh one.'
-      : "Repair it by hand; media reads these settings from no other file.";
+      ? 'Repair it, or delete it and run "mediagen login --provider <name> --api-key ..." to write a fresh one.'
+      : "Repair it by hand; mediagen reads these settings from no other file.";
   return (
     `invalid ${format} in ${file}${parseLocator(error)}: the parser message is suppressed because ` +
     `it quotes the document, which may hold an API key. ${remedy}`

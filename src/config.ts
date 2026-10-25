@@ -6,7 +6,7 @@ import { ConfigError, malformedDocumentMessage, unreadableFileMessage } from "./
 import { BUILTIN_PROVIDERS, DIALECT_DEFAULT_PATHS } from "./providers.js";
 import type { Dialect, ProviderConfig } from "./types.js";
 
-export interface MediaConfig {
+export interface MediagenConfig {
   default_provider: string;
   output_dir: string;
   providers: Record<string, Partial<ProviderConfig> & { api_type: Dialect }>;
@@ -15,20 +15,20 @@ export interface MediaConfig {
 const PROVIDER_STRING_FIELDS = ["base_url", "model", "path", "api_key_env"] as const;
 
 export function configDir(): string {
-  const override = process.env.MEDIA_CLI_CONFIG_DIR;
+  const override = process.env.MEDIAGEN_CLI_CONFIG_DIR;
   if (override) return override;
 
   const xdgConfigHome = process.env.XDG_CONFIG_HOME;
-  if (xdgConfigHome) return path.join(xdgConfigHome, "media-cli");
+  if (xdgConfigHome) return path.join(xdgConfigHome, "mediagen-cli");
 
-  return path.join(os.homedir(), ".config", "media-cli");
+  return path.join(os.homedir(), ".config", "mediagen-cli");
 }
 
 export function configPath(): string {
   return path.join(configDir(), "config.toml");
 }
 
-export function loadConfig(): MediaConfig {
+export function loadConfig(): MediagenConfig {
   const file = configPath();
   if (!fs.existsSync(file)) {
     return { default_provider: "qwen", output_dir: process.cwd(), providers: {} };
@@ -48,7 +48,7 @@ export function loadConfig(): MediaConfig {
     throw new ConfigError(malformedDocumentMessage(file, "TOML", error));
   }
 
-  const providers: MediaConfig["providers"] = {};
+  const providers: MediagenConfig["providers"] = {};
   const rawProviders = parsed.providers;
   if (rawProviders !== undefined) {
     if (!isTable(rawProviders)) {
@@ -69,7 +69,7 @@ export function loadConfig(): MediaConfig {
   };
 }
 
-export function resolveProvider(name: string, config: MediaConfig): ProviderConfig {
+export function resolveProvider(name: string, config: MediagenConfig): ProviderConfig {
   const override = config.providers[name];
   const builtin = BUILTIN_PROVIDERS[name];
 
@@ -79,7 +79,7 @@ export function resolveProvider(name: string, config: MediaConfig): ProviderConf
 
   if (!override) {
     throw new ConfigError(
-      `unknown provider "${name}": run "media login" for a built-in provider, or add a [providers.${name}] table to ${configPath()}`,
+      `unknown provider "${name}": run "mediagen login" for a built-in provider, or add a [providers.${name}] table to ${configPath()}`,
     );
   }
 

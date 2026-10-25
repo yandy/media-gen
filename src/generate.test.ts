@@ -20,26 +20,26 @@ const QWEN_ENV = { DASHSCOPE_API_KEY: QWEN_KEY };
 const ARK_ENV = { ARK_API_KEY: ARK_KEY };
 const NO_KEY_ENV = {};
 
-const originalConfigDir = process.env.MEDIA_CLI_CONFIG_DIR;
+const originalConfigDir = process.env.MEDIAGEN_CLI_CONFIG_DIR;
 
 let tempDir: string;
 let configHome: string;
 let outDir: string;
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "media-generate-"));
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-generate-"));
   configHome = path.join(tempDir, "config");
   outDir = path.join(tempDir, "out");
-  process.env.MEDIA_CLI_CONFIG_DIR = configHome;
+  process.env.MEDIAGEN_CLI_CONFIG_DIR = configHome;
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   if (originalConfigDir === undefined) {
-    delete process.env.MEDIA_CLI_CONFIG_DIR;
+    delete process.env.MEDIAGEN_CLI_CONFIG_DIR;
   } else {
-    process.env.MEDIA_CLI_CONFIG_DIR = originalConfigDir;
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = originalConfigDir;
   }
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
@@ -315,16 +315,16 @@ describe("runGenerate", () => {
     expect(forbidden).not.toHaveBeenCalled();
   });
 
-  it("reports a missing API key as a ConfigError naming media login before any request", async () => {
+  it("reports a missing API key as a ConfigError naming mediagen login before any request", async () => {
     const forbidden = stubFetchForbidden();
 
     const error = await rejection(runGenerate("a cat", options(), NO_KEY_ENV));
 
     expect(error).toBeInstanceOf(ConfigError);
-    expect(error.message).toContain("media login");
+    expect(error.message).toContain("mediagen login");
     // The hint must be a command that actually runs: login takes --provider.
-    expect(error.message).toContain("media login --provider qwen");
-    expect(error.message).not.toContain("media login qwen");
+    expect(error.message).toContain("mediagen login --provider qwen");
+    expect(error.message).not.toContain("mediagen login qwen");
     expect(error.message).toContain("qwen");
     expect(error.message).toContain("DASHSCOPE_API_KEY");
     expect(error.message).not.toContain(QWEN_KEY);
@@ -344,8 +344,8 @@ api_key_env = "MY_PROXY_KEY"
     const error = await rejection(runGenerate("a cat", options({ provider: "my-proxy" }), NO_KEY_ENV));
 
     expect(error).toBeInstanceOf(ConfigError);
-    expect(error.message).toContain("media login --provider my-proxy");
-    expect(error.message).not.toContain("media login my-proxy");
+    expect(error.message).toContain("mediagen login --provider my-proxy");
+    expect(error.message).not.toContain("mediagen login my-proxy");
     expect(error.message).toContain("MY_PROXY_KEY");
     expect(forbidden).not.toHaveBeenCalled();
   });

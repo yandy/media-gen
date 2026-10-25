@@ -15,7 +15,7 @@ import { BUILTIN_PROVIDERS } from "./providers.js";
 import type { ProviderConfig } from "./types.js";
 
 const originalEnv = {
-  MEDIA_CLI_CONFIG_DIR: process.env.MEDIA_CLI_CONFIG_DIR,
+  MEDIAGEN_CLI_CONFIG_DIR: process.env.MEDIAGEN_CLI_CONFIG_DIR,
   XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
   HOME: process.env.HOME,
 };
@@ -58,8 +58,8 @@ function thrownBy(action: () => unknown): Error {
 }
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "media-cli-auth-"));
-  process.env.MEDIA_CLI_CONFIG_DIR = tempDir;
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-cli-auth-"));
+  process.env.MEDIAGEN_CLI_CONFIG_DIR = tempDir;
 });
 
 afterEach(() => {
@@ -114,7 +114,7 @@ describe("loadAuth", () => {
     expect(error.message).not.toContain(secret);
     expect(error.message).not.toContain(secret.slice(0, 10));
     expect(error.message).not.toContain("api_key");
-    expect(error.message).toMatch(/media login/);
+    expect(error.message).toMatch(/mediagen login/);
   });
 
   it("keeps a numeric locator for a malformed auth.json", () => {
@@ -166,7 +166,7 @@ describe("saveApiKey", () => {
 
   it("creates the config dir with mode 0700", () => {
     const nested = path.join(tempDir, "nested", "cfg");
-    process.env.MEDIA_CLI_CONFIG_DIR = nested;
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = nested;
 
     saveApiKey("qwen", "sk-qwen-1234");
 

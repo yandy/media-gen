@@ -1,13 +1,28 @@
 {
-  "name": "media-cli",
+  "name": "@yandy0725/mediagen-cli",
   "version": "0.1.0",
+  "description": "Non-interactive image generation and editing CLI for agents: qwen-image and doubao/seedream, files on disk, JSON output.",
   "type": "module",
+  "license": "MIT",
   "bin": {
-    "media": "./dist/cli.js"
+    "mediagen": "./dist/cli.js"
   },
   "files": [
     "dist",
     "skills"
+  ],
+  "keywords": [
+    "cli",
+    "image",
+    "image-generation",
+    "image-editing",
+    "text-to-image",
+    "qwen",
+    "dashscope",
+    "seedream",
+    "doubao",
+    "ark",
+    "agent"
   ],
   "engines": {
     "node": ">=18"
@@ -15,7 +30,19 @@
   "scripts": {
     "build": "tsup src/cli.ts --format esm --target node18 --clean",
     "test": "vitest run",
-    "dev": "tsx src/cli.ts"
+    "dev": "tsx src/cli.ts",
+    "prepack": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yandy/mediagen-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yandy/mediagen-cli/issues"
+  },
+  "homepage": "https://github.com/yandy/mediagen-cli#readme",
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "commander": "^12.1.0",

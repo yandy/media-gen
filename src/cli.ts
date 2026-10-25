@@ -14,7 +14,7 @@ import {
   saveApiKey,
   type ApiKeySource,
 } from "./auth.js";
-import { configPath, loadConfig, type MediaConfig } from "./config.js";
+import { configPath, loadConfig, type MediagenConfig } from "./config.js";
 import { UsageError } from "./errors.js";
 import { runGenerate, type GenerateOptions } from "./generate.js";
 import { renderError, renderHuman, renderJson, type RenderedOutput } from "./output.js";
@@ -102,11 +102,11 @@ const ROOT_HELP = `
 Built for AI agents: explicit flags, no interactive prompts, machine-readable output.
 
 Quickstart:
-  media login --provider qwen --api-key sk-...    # store a key in auth.json
-  media login --provider qwen --base-url https://proxy.example.com  # endpoint only; key from env
-  media image generate "a red fox in fresh snow" --out-dir ./out
-  media image edit "make the sky sunset orange" --image ./photo.jpg
-  media image generate "..." --json               # {"ok":..,"files":[..],"errors":[..]}
+  mediagen login --provider qwen --api-key sk-...    # store a key in auth.json
+  mediagen login --provider qwen --base-url https://proxy.example.com  # endpoint only; key from env
+  mediagen image generate "a red fox in fresh snow" --out-dir ./out
+  mediagen image edit "make the sky sunset orange" --image ./photo.jpg
+  mediagen image generate "..." --json               # {"ok":..,"files":[..],"errors":[..]}
 
 Subcommands:
   login / logout    store or remove an API key, or set a base_url override; provider
@@ -118,45 +118,45 @@ Subcommands:
 Exit codes: 0 success (including a partial success that saved at least one file),
 1 an API/config/runtime failure, 2 a usage error.
 
-Run "media image generate --help" for the flag list, the model table and examples.`;
+Run "mediagen image generate --help" for the flag list, the model table and examples.`;
 
 /** Shared body of the `image generate` / `image edit` help; examples match the command. */
 function imageHelpText(command: "generate" | "edit"): string {
   const intro =
     command === "edit"
-      ? "Edit images: identical to \"media image generate\" except that at least one --image is required."
+      ? "Edit images: identical to \"mediagen image generate\" except that at least one --image is required."
       : "Generate an image from a prompt. Add --image to switch to image-to-image editing.";
 
   const examples =
     command === "edit"
       ? `  # edit a local file (local paths are read and sent as base64 data URLs)
-  media image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider qwen
+  mediagen image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider qwen
 
   # combine several references
-  media image edit "put the character from the first image into the scene from the second" --image ./character.png --image ./scene.jpg --provider qwen
+  mediagen image edit "put the character from the first image into the scene from the second" --image ./character.png --image ./scene.jpg --provider qwen
 
   # ark layer decomposition: one paid request, several files back (base + layers)
-  media image edit "separate the sticker from its background" --image ./sticker.png --provider ark --layer-decomposition true --json
+  mediagen image edit "separate the sticker from its background" --image ./sticker.png --provider ark --layer-decomposition true --json
 
   # a third-party proxy declared as [providers.my-proxy] in config.toml
-  media image edit "remove the timestamp" --image ./shot.png --provider my-proxy --out-dir ./out`
+  mediagen image edit "remove the timestamp" --image ./shot.png --provider my-proxy --out-dir ./out`
       : `  # text to image
-  media image generate "a red fox in fresh snow, soft morning light" --provider qwen --size 1024x1024 --out-dir ./out
+  mediagen image generate "a red fox in fresh snow, soft morning light" --provider qwen --size 1024x1024 --out-dir ./out
 
-  # image to image; "media image edit" is the same command with --image required
-  media image generate "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider qwen
+  # image to image; "mediagen image edit" is the same command with --image required
+  mediagen image generate "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider qwen
 
   # several references at once
-  media image generate "the character from the first image wearing the jacket from the second" --image ./character.png --image ./jacket.png --provider qwen
+  mediagen image generate "the character from the first image wearing the jacket from the second" --image ./character.png --image ./jacket.png --provider qwen
 
   # four ark variants as JSON, for an agent to parse
-  media image generate "minimalist logo for a coffee roastery" --provider ark --model doubao-seedream-5-0-pro --n 4 --seed 42 --json
+  mediagen image generate "minimalist logo for a coffee roastery" --provider ark --model doubao-seedream-5-0-pro --n 4 --seed 42 --json
 
   # a third-party proxy declared as [providers.my-proxy] in config.toml
-  media image generate "product photo on a white background" --provider my-proxy --out-dir ./shots
+  mediagen image generate "product photo on a white background" --provider my-proxy --out-dir ./shots
 
   # a one-off test against a proxy, without touching config.toml
-  media image generate "colour test card" --provider qwen --base-url https://proxy.example.com --api-key sk-...`;
+  mediagen image generate "colour test card" --provider qwen --base-url https://proxy.example.com --api-key sk-...`;
 
   return `
 ${intro}
@@ -253,7 +253,7 @@ function collectImage(value: string, previous: string[] | undefined): string[] {
  */
 export function createProgram(options: ProgramOptions = {}): Command {
   const deps = options.deps ?? {};
-  const program = new Command("media");
+  const program = new Command("mediagen");
 
   program
     .description(
@@ -385,14 +385,14 @@ function reportCommanderError(error: CommanderError, text: string, jsonMode: boo
     return 0;
   }
 
-  // A bare group command (`media`, `media image`, ...): show its help, then fail.
+  // A bare group command (`mediagen`, `mediagen image`, ...): show its help, then fail.
   if (error.code === "commander.help") {
     if (!jsonMode) {
       if (text !== "") process.stdout.write(text);
       return 2;
     }
     return reportError(
-      new UsageError('missing command; run "media --help" to list the commands'),
+      new UsageError('missing command; run "mediagen --help" to list the commands'),
       true,
     );
   }
@@ -522,14 +522,14 @@ async function runLogin(flags: LoginFlags, deps: CliDeps): Promise<void> {
 }
 
 /**
- * `media login --provider P --base-url U` with no `--api-key`: writes only
+ * `mediagen login --provider P --base-url U` with no `--api-key`: writes only
  * base_url to config.toml and tells the user where the key has to come from,
  * since nothing was stored and no prompt was shown.
  */
 function runBaseUrlOnlyLogin(
   name: string,
   baseUrl: string,
-  config: MediaConfig,
+  config: MediagenConfig,
   json: boolean,
 ): void {
   const configFile = setProviderBaseUrl(name, baseUrl);
@@ -556,13 +556,13 @@ function runBaseUrlOnlyLogin(
 }
 
 /** How provider `name` gets its key now that login stored none. */
-function keyRouteHint(name: string, config: MediaConfig): string {
+function keyRouteHint(name: string, config: MediagenConfig): string {
   const keyEnv = envVarFor(buildProbe(name, config.providers[name]));
   const route =
     keyEnv === undefined
       ? `declare api_key_env under [providers.${tomlKey(name)}] in ${configPath()} and set that variable`
       : `set the ${keyEnv} environment variable`;
-  return `${route}, or run "media login --provider ${name} --api-key ..." to store one`;
+  return `${route}, or run "mediagen login --provider ${name} --api-key ..." to store one`;
 }
 
 /**
@@ -570,7 +570,7 @@ function keyRouteHint(name: string, config: MediaConfig): string {
  * provider definition (api_type/base_url/model) lives in config.toml, so an
  * unknown name is a usage error that points at the file.
  */
-function assertKnownProvider(name: string, config: MediaConfig): void {
+function assertKnownProvider(name: string, config: MediagenConfig): void {
   if (Object.hasOwn(BUILTIN_PROVIDERS, name) || Object.hasOwn(config.providers, name)) return;
   throw new UsageError(
     `unknown provider "${name}": login stores API keys but never creates providers; ` +
@@ -689,7 +689,7 @@ function runAuthStatus(flags: { json?: boolean }): void {
  * for a provider whose config.toml entry is incomplete: `auth status` and
  * `config show` must report such a provider instead of failing.
  */
-function providerProbes(config: MediaConfig): ProviderConfig[] {
+function providerProbes(config: MediagenConfig): ProviderConfig[] {
   const names = [
     ...Object.keys(BUILTIN_PROVIDERS),
     ...Object.keys(config.providers).filter((name) => !Object.hasOwn(BUILTIN_PROVIDERS, name)),
@@ -728,7 +728,7 @@ function describeKeySource(provider: ProviderConfig, source: ApiKeySource): stri
 }
 
 function missingKeyHint(provider: ProviderConfig): string {
-  const hints = [`run "media login --provider ${provider.name}"`];
+  const hints = [`run "mediagen login --provider ${provider.name}"`];
   const keyEnv = envVarFor(provider);
   if (keyEnv !== undefined) hints.push(`set ${keyEnv}`);
   hints.push("pass --api-key");
@@ -811,7 +811,7 @@ function configuredValue(value: string, declared: unknown): ConfiguredValue {
   return declared === undefined ? { value, source: "default" } : { value, source: "config.toml" };
 }
 
-function buildProviderView(probe: ProviderConfig, config: MediaConfig): ProviderView {
+function buildProviderView(probe: ProviderConfig, config: MediagenConfig): ProviderView {
   const override: Partial<ProviderConfig> | undefined = config.providers[probe.name];
   const builtin = Object.hasOwn(BUILTIN_PROVIDERS, probe.name)
     ? BUILTIN_PROVIDERS[probe.name]
@@ -1088,8 +1088,8 @@ function sameInstant(before: unknown, after: unknown): boolean {
  * Both sides of the guard below go through `realpathSync` because Node resolves the
  * *main* module through `realpath` too (that is what `--preserve-symlinks-main`
  * disables). Comparing a realpath'd `import.meta.url` against the raw `argv[1]` is
- * false for every symlinked invocation — the `media` shim npm creates for
- * `bin.media`, `npx`, `node_modules/.bin/media` — which made the packaged binary
+ * false for every symlinked invocation — the `mediagen` shim npm creates for
+ * `bin.mediagen`, `npx`, `node_modules/.bin/mediagen` — which made the packaged binary
  * print nothing and exit 0, the worst failure mode for an agent-facing CLI.
  * Resolving both sides keeps `--preserve-symlinks-main` working as well.
  */

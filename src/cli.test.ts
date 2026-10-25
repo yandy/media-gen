@@ -15,7 +15,7 @@ const QWEN_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/images/gener
 const ARK_URL = "https://ark.cn-beijing.volces.com/api/v3/images/generations";
 
 const TRACKED_ENV = [
-  "MEDIA_CLI_CONFIG_DIR",
+  "MEDIAGEN_CLI_CONFIG_DIR",
   "XDG_CONFIG_HOME",
   "DASHSCOPE_API_KEY",
   "ARK_API_KEY",
@@ -40,12 +40,12 @@ function writer(sink: string[]): typeof process.stdout.write {
 }
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "media-cli-"));
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-cli-"));
   configHome = path.join(tempDir, "config");
   outDir = path.join(tempDir, "out");
   fs.mkdirSync(configHome, { recursive: true });
 
-  process.env.MEDIA_CLI_CONFIG_DIR = configHome;
+  process.env.MEDIAGEN_CLI_CONFIG_DIR = configHome;
   delete process.env.XDG_CONFIG_HOME;
   delete process.env.DASHSCOPE_API_KEY;
   delete process.env.ARK_API_KEY;
@@ -151,7 +151,7 @@ function writeImage(name: string): string {
   return file;
 }
 
-describe("media --help", () => {
+describe("mediagen --help", () => {
   it("lists every command group and exits 0", async () => {
     const result = await run(["--help"]);
 
@@ -160,13 +160,13 @@ describe("media --help", () => {
     for (const command of ["image", "login", "logout", "auth", "config"]) {
       expect(result.stdout).toContain(command);
     }
-    expect(result.stdout).toContain("media image generate --help");
+    expect(result.stdout).toContain("mediagen image generate --help");
   });
 
   it("createProgram() returns a fresh commander program", () => {
     const program = createProgram();
 
-    expect(program.name()).toBe("media");
+    expect(program.name()).toBe("mediagen");
     const names = program.commands.map((command) => command.name());
     expect(names).toEqual(expect.arrayContaining(["login", "logout", "auth", "config", "image"]));
     expect(createProgram()).not.toBe(program);
@@ -203,7 +203,7 @@ describe("image help text", () => {
     "--base-url <url>",
   ];
 
-  it("media image generate --help lists every flag from the spec table", async () => {
+  it("mediagen image generate --help lists every flag from the spec table", async () => {
     const result = await run(["image", "generate", "--help"]);
 
     expect(result.code).toBe(0);
@@ -212,7 +212,7 @@ describe("image help text", () => {
     }
   });
 
-  it("media image generate --help documents --n as 1-6 with the ark fan-out warning", async () => {
+  it("mediagen image generate --help documents --n as 1-6 with the ark fan-out warning", async () => {
     const result = await run(["image", "generate", "--help"]);
 
     expect(result.stdout).toContain("1-6");
@@ -220,7 +220,7 @@ describe("image help text", () => {
     expect(result.stdout).toMatch(/single request/);
   });
 
-  it("media image generate --help carries the model table and the size reference", async () => {
+  it("mediagen image generate --help carries the model table and the size reference", async () => {
     const result = await run(["image", "generate", "--help"]);
 
     for (const model of [
@@ -236,27 +236,27 @@ describe("image help text", () => {
     expect(result.stdout).toMatch(/WxH/i);
   });
 
-  it("media image generate --help carries at least four copy-pasteable examples", async () => {
+  it("mediagen image generate --help carries at least four copy-pasteable examples", async () => {
     const result = await run(["image", "generate", "--help"]);
 
     const examples = result.stdout
       .split("\n")
-      .filter((line) => line.trimStart().startsWith("media image"));
+      .filter((line) => line.trimStart().startsWith("mediagen image"));
     expect(examples.length).toBeGreaterThanOrEqual(4);
-    expect(result.stdout).toContain("media image edit");
+    expect(result.stdout).toContain("mediagen image edit");
     expect(result.stdout).toContain("--provider my-proxy");
   });
 
-  it("media image edit --help states that --image is required", async () => {
+  it("mediagen image edit --help states that --image is required", async () => {
     const result = await run(["image", "edit", "--help"]);
 
     expect(result.code).toBe(0);
     expect(result.stdout).toMatch(/at least one --image/);
     expect(result.stdout).toContain("--image <path-or-url>");
-    expect(result.stdout).toContain("media image edit");
+    expect(result.stdout).toContain("mediagen image edit");
   });
 
-  it("media image with no subcommand shows help and exits 2", async () => {
+  it("mediagen image with no subcommand shows help and exits 2", async () => {
     const result = await run(["image"]);
 
     expect(result.code).toBe(2);
@@ -265,7 +265,7 @@ describe("image help text", () => {
   });
 });
 
-describe("media config path", () => {
+describe("mediagen config path", () => {
   it("prints only the config path", async () => {
     const result = await run(["config", "path"]);
 
@@ -285,7 +285,7 @@ describe("media config path", () => {
   });
 });
 
-describe("media config show", () => {
+describe("mediagen config show", () => {
   it("prints the built-in defaults with a source note for each value", async () => {
     const result = await run(["config", "show"]);
 
@@ -375,7 +375,7 @@ api_key_env = "MY_PROXY_KEY"
   });
 });
 
-describe("media auth status", () => {
+describe("mediagen auth status", () => {
   it("reports every provider as unconfigured with no auth file", async () => {
     const result = await run(["auth", "status"]);
 
@@ -383,7 +383,7 @@ describe("media auth status", () => {
     expect(result.stdout).toContain("qwen");
     expect(result.stdout).toContain("ark");
     expect(result.stdout).toMatch(/not configured|no API key/i);
-    expect(result.stdout).toContain("media login");
+    expect(result.stdout).toContain("mediagen login");
   });
 
   it("emits a providers array with name/configured/source and exits 0", async () => {
@@ -435,7 +435,7 @@ describe("media auth status", () => {
   });
 });
 
-describe("media login", () => {
+describe("mediagen login", () => {
   it("stores the key with --api-key and prints only the masked key", async () => {
     const result = await run(["login", "--provider", "qwen", "--api-key", API_KEY]);
 
@@ -771,7 +771,7 @@ api_key_env = "MY_PROXY_KEY"
   });
 });
 
-describe("media logout", () => {
+describe("mediagen logout", () => {
   it("removes the stored key", async () => {
     await run(["login", "--provider", "qwen", "--api-key", API_KEY]);
 
@@ -801,7 +801,7 @@ describe("media logout", () => {
   });
 });
 
-describe("media image generate", () => {
+describe("mediagen image generate", () => {
   it("passes every qwen flag through to the request body", async () => {
     const { calls, downloads } = stubFetch(() =>
       apiResponse([{ url: "https://cdn.example.com/a.png" }, { url: "https://cdn.example.com/b.png" }]),
@@ -984,7 +984,7 @@ describe("media image generate", () => {
     const result = await run(["image", "generate", "x", "--provider", "qwen", "--out-dir", outDir]);
 
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("media login");
+    expect(result.stderr).toContain("mediagen login");
     expect(result.stderr).toContain("DASHSCOPE_API_KEY");
     expect(result.stderr).not.toMatch(/at .*cli\.ts/);
   });
@@ -1093,7 +1093,7 @@ describe("media image generate", () => {
   });
 });
 
-describe("media image edit", () => {
+describe("mediagen image edit", () => {
   it("exits 2 with a message about --image when no image is given", async () => {
     const result = await run(["image", "edit", "x", "--provider", "qwen", "--api-key", API_KEY]);
 

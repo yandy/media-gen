@@ -7,12 +7,12 @@ import {
   configPath,
   loadConfig,
   resolveProvider,
-  type MediaConfig,
+  type MediagenConfig,
 } from "./config.js";
 import { ConfigError } from "./errors.js";
 
 const originalEnv = {
-  MEDIA_CLI_CONFIG_DIR: process.env.MEDIA_CLI_CONFIG_DIR,
+  MEDIAGEN_CLI_CONFIG_DIR: process.env.MEDIAGEN_CLI_CONFIG_DIR,
   XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
   HOME: process.env.HOME,
 };
@@ -23,7 +23,7 @@ function writeConfig(toml: string): void {
   fs.writeFileSync(path.join(tempDir, "config.toml"), toml);
 }
 
-function emptyConfig(): MediaConfig {
+function emptyConfig(): MediagenConfig {
   return { default_provider: "qwen", output_dir: process.cwd(), providers: {} };
 }
 
@@ -38,8 +38,8 @@ function thrownBy(action: () => unknown): Error {
 }
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "media-cli-config-"));
-  process.env.MEDIA_CLI_CONFIG_DIR = tempDir;
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-cli-config-"));
+  process.env.MEDIAGEN_CLI_CONFIG_DIR = tempDir;
 });
 
 afterEach(() => {
@@ -54,26 +54,26 @@ afterEach(() => {
 });
 
 describe("configDir", () => {
-  it("honors MEDIA_CLI_CONFIG_DIR", () => {
+  it("honors MEDIAGEN_CLI_CONFIG_DIR", () => {
     expect(configDir()).toBe(tempDir);
     expect(configPath()).toBe(path.join(tempDir, "config.toml"));
   });
 
   it("falls back to XDG_CONFIG_HOME", () => {
-    delete process.env.MEDIA_CLI_CONFIG_DIR;
+    delete process.env.MEDIAGEN_CLI_CONFIG_DIR;
     const xdgHome = path.join(tempDir, "xdg");
     process.env.XDG_CONFIG_HOME = xdgHome;
 
-    expect(configDir()).toBe(path.join(xdgHome, "media-cli"));
+    expect(configDir()).toBe(path.join(xdgHome, "mediagen-cli"));
   });
 
   it("falls back to ~/.config when XDG_CONFIG_HOME is unset", () => {
-    delete process.env.MEDIA_CLI_CONFIG_DIR;
+    delete process.env.MEDIAGEN_CLI_CONFIG_DIR;
     delete process.env.XDG_CONFIG_HOME;
     const home = path.join(tempDir, "home");
     process.env.HOME = home;
 
-    expect(configDir()).toBe(path.join(home, ".config", "media-cli"));
+    expect(configDir()).toBe(path.join(home, ".config", "mediagen-cli"));
   });
 });
 
@@ -109,7 +109,7 @@ describe("loadConfig", () => {
   });
 
   it("computes the default output_dir at call time", () => {
-    const otherDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "media-cli-cwd-")));
+    const otherDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-cli-cwd-")));
     const originalCwd = process.cwd();
     try {
       process.chdir(otherDir);
@@ -256,7 +256,7 @@ describe("resolveProvider", () => {
     const error = thrownBy(() => resolveProvider("nope", emptyConfig()));
 
     expect(error).toBeInstanceOf(ConfigError);
-    expect(error.message).toContain("media login");
+    expect(error.message).toContain("mediagen login");
     expect(error.message).toContain("config.toml");
   });
 });
