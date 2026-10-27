@@ -356,10 +356,6 @@ function readProviderEntry(name: string, file: string, table: TomlTable): Provid
       continue;
     }
 
-    if (key === "model") {
-      throw new ConfigError(preTaskShapeMessage(name, file, table, value));
-    }
-
     if (isTask(key)) {
       if (!isTable(value)) {
         throw new ConfigError(
@@ -442,54 +438,6 @@ function readTaskBlock(
   }
 
   return block;
-}
-
-/**
- * The rewrite a pre-task config needs, spelled out. Cost of guessing wrong here
- * is a user editing three tables from memory, so the message carries the whole
- * replacement.
- */
-function preTaskShapeMessage(name: string, file: string, table: TomlTable, model: unknown): string {
-  const id = typeof model === "string" ? model : "<model id>";
-  const apiType = typeof table.api_type === "string" ? table.api_type : "<qwen|ark>";
-  const rawBaseUrl = typeof table.base_url === "string" ? table.base_url : "<origin>";
-  const origin = migrationOrigin(rawBaseUrl);
-  const wasAnnotation = origin === rawBaseUrl ? "" : `   # was "${rawBaseUrl}"`;
-  const key = tomlKey(name);
-
-  const provider = [
-    `[providers.${key}]`,
-    `api_type = "${apiType}"`,
-    `base_url = "${origin}"${wasAnnotation}`,
-  ];
-  if (typeof table.api_key_env === "string") {
-    provider.push(`api_key_env = "${table.api_key_env}"`);
-  }
-
-  // Every line stands on its own so the whole rewrite can be pasted in one go;
-  // previous versions concatenated the parts and glued "]default" together.
-  return [
-    `config.toml still uses the pre-task shape: [providers.${key}] in ${file} sets "model",`,
-    "which now lives under a task table. Rewrite it as:",
-    "",
-    ...provider,
-    "",
-    `[providers.${key}.image]`,
-    `default = "${id}"`,
-    `models  = ["${id}"]`,
-    "",
-  ].join("\n");
-}
-
-/**
- * The origin a pre-task base_url should become. On a vendor's own host the whole
- * pathname is dropped: an unrecognised vendor sub-path would survive every local
- * check and then 404, so copying it verbatim would produce a broken config.
- */
-function migrationOrigin(baseUrl: string): string {
-  const issue = vendorPathIssue(baseUrl);
-  if (issue !== undefined) return issue.origin;
-  return baseUrl;
 }
 
 /**

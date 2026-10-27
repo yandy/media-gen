@@ -334,43 +334,17 @@ describe("loadConfig", () => {
     expect(config.providers.dashscope.api_key_env).toBeUndefined();
   });
 
-  it("rejects the pre-task shape and shows the rewrite", () => {
-    writeConfig(`default_provider = "volcengine"
-
-[providers.volcengine]
+  it("rejects a model on the provider table as an unknown key", () => {
+    writeConfig(`[providers.volcengine]
 api_type = "ark"
-base_url = "https://ark.cn-beijing.volces.com/api/v3"
+base_url = "https://ark.cn-beijing.volces.com"
 model = "doubao-seedream-5-0-flash-260915"
 `);
 
-    const error = thrownBy(() => loadConfig());
-
-    expect(error).toBeInstanceOf(ConfigError);
-    expect(error.message).toContain("still uses the pre-task shape");
-    // The snippet must be paste-ready, not merely present: every line on its own.
-    expect(error.message).toContain(
-      [
-        "[providers.volcengine.image]",
-        'default = "doubao-seedream-5-0-flash-260915"',
-        'models  = ["doubao-seedream-5-0-flash-260915"]',
-      ].join("\n"),
-    );
-  });
-
-  it("reduces a vendor base_url to its origin in the migration snippet", () => {
-    writeConfig(`[providers.volcengine]
-api_type = "ark"
-base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
-model = "m"
-`);
-
-    const error = thrownBy(() => loadConfig());
-
-    // An unknown vendor sub-path would survive every local check and then 404, so
-    // the paste-ready snippet drops the whole pathname and says what it was.
-    expect(error.message).toContain('base_url = "https://ark.cn-beijing.volces.com"');
-    expect(error.message).toContain(
-      '# was "https://ark.cn-beijing.volces.com/api/plan/v3"',
+    // Models live on a task table now; there is no special-cased history here.
+    expect(() => loadConfig()).toThrow(
+      'unknown key "model" under [providers.volcengine]; ' +
+        "expected api_type, base_url, api_key_env, image, video",
     );
   });
 

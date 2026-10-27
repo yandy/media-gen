@@ -31,17 +31,14 @@ function bindingFor(overrides: Partial<ProviderConfig> = {}, task: Task = "image
   };
 }
 
-/** Transport tests are about the wire, not about selection; they post as image. */
-function postAsImage(params: {
-  provider: ProviderConfig;
-  apiKey: string;
-  request: ImageRequest;
-}): Promise<ParsedResponse> {
-  return callApi({
-    binding: { provider: params.provider, task: "image", model: params.request.model, timeout_ms: REQUEST_TIMEOUT_MS },
-    apiKey: params.apiKey,
-    request: params.request,
-  });
+/** A binding for transport tests: they exercise the wire, not selection. */
+function bindingOf(providerConfig: ProviderConfig, task: Task = "image"): TaskBinding {
+  return {
+    provider: providerConfig,
+    task,
+    model: "qwen-image-3.0",
+    timeout_ms: REQUEST_TIMEOUT_MS,
+  };
 }
 
 function imageRequest(overrides: Partial<ImageRequest> = {}): ImageRequest {
@@ -150,14 +147,14 @@ describe("callApi: a task's path override", () => {
   });
 });
 
-describe("postAsImage", () => {
+describe("callApi: the wire", () => {
   it("POSTs the joined URL with bearer auth and the body built by the adapter", async () => {
     const fetchMock = stubFetch(() =>
       jsonResponse({ data: [{ url: "https://cdn.example.com/cat.png" }] }, 200, REQUEST_ID),
     );
 
-    const parsed = await postAsImage({
-      provider: provider(),
+    const parsed = await callApi({
+      binding: bindingOf(provider()),
       apiKey: API_KEY,
       request: imageRequest(),
     });
@@ -185,12 +182,12 @@ describe("postAsImage", () => {
       jsonResponse({ data: [{ url: "https://cdn.example.com/1.png" }] }),
     );
 
-    await postAsImage({
-      provider: provider({
+    await callApi({
+      binding: bindingOf(provider({
         name: "volcengine",
         api_type: "ark",
         base_url: "https://ark.cn-beijing.volces.com",
-      }),
+      })),
       apiKey: API_KEY,
       request: imageRequest(),
     });
@@ -205,8 +202,8 @@ describe("postAsImage", () => {
       jsonResponse({ data: [{ url: "https://cdn.example.com/1.png" }] }),
     );
 
-    await postAsImage({
-      provider: provider({ base_url: "https://abc.cn-beijing.maas.aliyuncs.com" }),
+    await callApi({
+      binding: bindingOf(provider({ base_url: "https://abc.cn-beijing.maas.aliyuncs.com" })),
       apiKey: API_KEY,
       request: imageRequest(),
     });
@@ -221,8 +218,8 @@ describe("postAsImage", () => {
       jsonResponse({ data: [{ url: "https://cdn.example.com/cat.png" }] }, 200, REQUEST_ID),
     );
 
-    const parsed = await postAsImage({
-      provider: provider(),
+    const parsed = await callApi({
+      binding: bindingOf(provider()),
       apiKey: API_KEY,
       request: imageRequest(),
     });
@@ -238,8 +235,8 @@ describe("postAsImage", () => {
       }),
     );
 
-    const parsed = await postAsImage({
-      provider: provider(),
+    const parsed = await callApi({
+      binding: bindingOf(provider()),
       apiKey: API_KEY,
       request: imageRequest(),
     });
@@ -257,7 +254,7 @@ describe("postAsImage", () => {
     );
 
     const error = await rejection(
-      postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -274,7 +271,7 @@ describe("postAsImage", () => {
     );
 
     const error = await rejection(
-      postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -290,7 +287,7 @@ describe("postAsImage", () => {
     stubFetch(() => new Response("", { status: 200 }));
 
     const error = await rejection(
-      postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -317,7 +314,7 @@ describe("postAsImage", () => {
     );
 
     const error = await rejection(
-      postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(requestedTimeoutMs).toBe(REQUEST_TIMEOUT_MS);
@@ -329,7 +326,7 @@ describe("postAsImage", () => {
     stubFetch(() => Promise.reject(new TypeError("fetch failed")));
 
     const error = await rejection(
-      postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -348,7 +345,7 @@ describe("postAsImage", () => {
     stubFetch(() => response);
 
     const error = await rejection(
-      postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -360,8 +357,8 @@ describe("postAsImage", () => {
     const fetchMock = stubFetch(() => jsonResponse({}, 200));
 
     const error = await rejection(
-      postAsImage({
-        provider: provider(),
+      callApi({
+        binding: bindingOf(provider()),
         apiKey: API_KEY,
         request: imageRequest({ output_format: "png" }),
       }),
@@ -378,7 +375,7 @@ describe("postAsImage", () => {
     stubFetch(() => jsonResponse({}, 200));
 
     const error = await rejection(
-      postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -400,7 +397,7 @@ describe("postAsImage", () => {
     for (const impl of failures) {
       stubFetch(impl);
       const error = await rejection(
-        postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+        callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
       );
       expect(error.message).not.toContain(API_KEY);
     }
@@ -417,7 +414,7 @@ describe("postAsImage", () => {
     for (const response of responses) {
       stubFetch(() => response);
       const error = await rejection(
-        postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+        callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
       );
       expect(error).toBeInstanceOf(ApiError);
       expect(error.message).not.toContain(API_KEY);
@@ -434,7 +431,7 @@ describe("postAsImage", () => {
       );
 
       const error = await rejection(
-        postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+        callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
       );
 
       expect(error).toBeInstanceOf(ApiError);
@@ -451,7 +448,7 @@ describe("postAsImage", () => {
     stubFetch(() => jsonResponse({ error: { code: 40001, message: "invalid parameter" } }, 400));
 
     const error = await rejection(
-      postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -466,7 +463,7 @@ describe("postAsImage", () => {
     );
 
     const error = await rejection(
-      postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect((error as ApiError).code).toBeUndefined();
@@ -482,7 +479,7 @@ describe("postAsImage", () => {
     );
 
     const error = await rejection(
-      postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -498,7 +495,7 @@ describe("postAsImage", () => {
     const request = imageRequest({ prompt: 10n as unknown as string });
 
     const error = await rejection(
-      postAsImage({ provider: provider(), apiKey: API_KEY, request }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request }),
     );
 
     expect(error).not.toBeInstanceOf(ApiError);
@@ -508,7 +505,7 @@ describe("postAsImage", () => {
   });
 });
 
-describe("postAsImage: a 404 with an empty body", () => {
+describe("callApi: a 404 with an empty body", () => {
   function arkProvider(): ProviderConfig {
     return provider({
       name: "ark",
@@ -521,8 +518,8 @@ describe("postAsImage: a 404 with an empty body", () => {
     stubFetch(() => new Response("", { status: 404 }));
 
     const error = await rejection(
-      postAsImage({
-        provider: provider({ base_url: "https://dashscope.aliyuncs.com" }),
+      callApi({
+        binding: bindingOf(provider({ base_url: "https://dashscope.aliyuncs.com" })),
         apiKey: API_KEY,
         request: imageRequest(),
       }),
@@ -546,8 +543,8 @@ describe("postAsImage: a 404 with an empty body", () => {
     stubFetch(() => new Response("", { status: 404 }));
 
     const error = await rejection(
-      postAsImage({
-        provider: provider({ name: "my-qwen", base_url: "https://relay.example.com" }),
+      callApi({
+        binding: bindingOf(provider({ name: "my-qwen", base_url: "https://relay.example.com" })),
         apiKey: API_KEY,
         request: imageRequest(),
       }),
@@ -562,7 +559,7 @@ describe("postAsImage: a 404 with an empty body", () => {
     stubFetch(() => new Response("", { status: 404 }));
 
     const error = await rejection(
-      postAsImage({ provider: arkProvider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(arkProvider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -575,7 +572,7 @@ describe("postAsImage: a 404 with an empty body", () => {
     stubFetch(() => jsonResponse({ error: { code: "ModelNotFound", message: "no such model" } }, 404));
 
     const error = await rejection(
-      postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error.message).toContain("no such model");
@@ -587,7 +584,7 @@ describe("postAsImage: a 404 with an empty body", () => {
     stubFetch(() => new Response("", { status: 503 }));
 
     const error = await rejection(
-      postAsImage({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error.message).toContain("503");
