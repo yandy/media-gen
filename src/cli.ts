@@ -29,6 +29,7 @@ import { ConfigError, UsageError } from "./errors.js";
 import { runGenerate, type GenerateOptions } from "./generate.js";
 import { renderError, renderHuman, renderJson, type RenderedOutput } from "./output.js";
 import { shellArg, tomlBasicString, tomlKey } from "./toml.js";
+import { dialectPath } from "./api/index.js";
 import { normalizeHttpBaseUrl } from "./util.js";
 
 /**
@@ -68,6 +69,8 @@ interface ProviderView {
   base_url?: ConfiguredValue;
   model?: ConfiguredValue;
   api_key_env?: ConfiguredValue;
+  /** base_url + the dialect endpoint: the URL a request would actually hit. */
+  endpoint?: string;
   api_key: KeyStatus;
   missing?: string[];
 }
@@ -834,6 +837,7 @@ function runConfigShow(flags: { json?: boolean }): void {
       const value = view[field];
       if (value !== undefined) lines.push(`    ${field}: ${show(value)}`);
     }
+    if (view.endpoint !== undefined) lines.push(`    endpoint: ${view.endpoint} (computed)`);
     if (view.missing !== undefined && view.missing.length > 0) {
       lines.push(`    missing: ${view.missing.join(", ")} (required in ${file})`);
     }
@@ -885,6 +889,13 @@ function buildProviderView(name: string, entry: ProviderOverride): ProviderView 
     ...fields,
     api_key: keyStatus(name, entry.api_key_env),
   };
+
+  // The dialect owns the endpoint, so this is the URL a request would hit. A
+  // base_url that cannot be parsed gets no endpoint line rather than a throw:
+  // config show has to survive a half-written file.
+  const endpointPath = fields.api_type === undefined ? undefined : dialectPath(fields.api_type.value);
+  const base = fields.base_url === undefined ? undefined : normalizeHttpBaseUrl(fields.base_url.value);
+  if (endpointPath !== undefined && base !== undefined) view.endpoint = `${base}${endpointPath}`;
   if (missing.length > 0) view.missing = missing;
   return view;
 }

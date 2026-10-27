@@ -450,6 +450,35 @@ api_key_env = "MY_PROXY_KEY"
     expect(result.stdout).not.toContain(API_KEY);
   });
 
+  it("prints the endpoint a request will actually hit", async () => {
+    writeConfig(
+      '[providers.p]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "m"\n',
+    );
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(
+      "endpoint: https://proxy.example.com/api/v3/images/generations (computed)",
+    );
+    expect(result.stdout).not.toContain("path:");
+  });
+
+  it("omits the endpoint line when base_url cannot be parsed", async () => {
+    writeConfig(
+      '[providers.good]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "m"\n\n[providers.broken]\napi_type = "ark"\nbase_url = "not-a-url"\nmodel = "m"\n',
+    );
+
+    const result = await run(["config", "show", "--json"]);
+
+    expect(result.code).toBe(0);
+    const providers = JSON.parse(result.stdout).providers as Record<string, unknown>[];
+    expect(providers.find((p) => p.name === "good")?.endpoint).toBe(
+      "https://proxy.example.com/api/v3/images/generations",
+    );
+    expect(providers.find((p) => p.name === "broken")).not.toHaveProperty("endpoint");
+  });
+
   it("reports an incomplete provider instead of failing", async () => {
     writeConfig('[providers.half-baked]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\n');
 
