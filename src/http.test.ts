@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, UsageError } from "./errors.js";
-import { callImageApi, parseJsonOrThrow } from "./http.js";
-import type { ImageRequest, ProviderConfig } from "./types.js";
+import { callApi, parseJsonOrThrow } from "./http.js";
+import type { ImageRequest, ParsedResponse, ProviderConfig, Task, TaskBinding } from "./types.js";
 
 const API_KEY = "sk-test-secret-key-0123456789";
-const QWEN_URL = "https://dashscope.example.com/images/generations";
+const QWEN_URL = "https://dashscope.example.com/compatible-mode/v1/images/generations";
 const REQUEST_ID = "req-0001";
 const REQUEST_TIMEOUT_MS = 300_000;
 
@@ -18,8 +18,26 @@ function provider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     name: "qwen",
     api_type: "qwen",
     base_url: "https://dashscope.example.com",
-    model: "qwen-image-3.0",
     ...overrides,
+  };
+}
+
+function bindingFor(overrides: Partial<ProviderConfig> = {}, task: Task = "image"): TaskBinding {
+  return {
+    provider: provider(overrides),
+    task,
+    model: "qwen-image-3.0",
+    timeout_ms: REQUEST_TIMEOUT_MS,
+  };
+}
+
+/** A binding for transport tests: they exercise the wire, not selection. */
+function bindingOf(providerConfig: ProviderConfig, task: Task = "image"): TaskBinding {
+  return {
+    provider: providerConfig,
+    task,
+    model: "qwen-image-3.0",
+    timeout_ms: REQUEST_TIMEOUT_MS,
   };
 }
 
@@ -67,14 +85,76 @@ function jsonResponse(body: unknown, status = 200, requestId?: string): Response
   return new Response(JSON.stringify(body), { status, headers });
 }
 
-describe("callImageApi", () => {
+describe("callApi: the binding decides task and timeout", () => {
+  it("uses the binding's timeout for the abort signal", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchMock = stubFetch(() =>
+      jsonResponse({ data: [{ url: "https://cdn.example.com/1.png" }] }),
+    );
+
+    await callApi({
+      binding: { ...bindingFor(), timeout_ms: 42_000 },
+      apiKey: API_KEY,
+      request: imageRequest(),
+    });
+
+    // The value matters, not the type: timeout_ms: 1 would satisfy an instanceof check.
+    expect(timeoutSpy).toHaveBeenCalledWith(42_000);
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("refuses a task the dialect has no adapter for, before any fetch", async () => {
+    const fetchMock = stubFetch(() => jsonResponse({ data: [] }));
+
+    await expect(
+      callApi({
+        binding: bindingFor({}, "video"),
+        apiKey: API_KEY,
+        request: imageRequest(),
+      }),
+    ).rejects.toThrow('the "qwen" dialect has no "video" adapter yet');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("callApi: a task's path override", () => {
+  it("appends the declared path instead of the adapter's", async () => {
+    const fetchMock = stubFetch(() =>
+      jsonResponse({ data: [{ url: "https://cdn.example.com/1.png" }] }),
+    );
+
+    await callApi({
+      binding: {
+        provider: provider({
+          name: "ark-plan",
+          api_type: "ark",
+          base_url: "https://ark.cn-beijing.volces.com/api/plan/v3",
+        }),
+        task: "image",
+        model: "m",
+        timeout_ms: REQUEST_TIMEOUT_MS,
+        path: "/images/generations",
+      },
+      apiKey: API_KEY,
+      request: imageRequest(),
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://ark.cn-beijing.volces.com/api/plan/v3/images/generations",
+    );
+  });
+});
+
+describe("callApi: the wire", () => {
   it("POSTs the joined URL with bearer auth and the body built by the adapter", async () => {
     const fetchMock = stubFetch(() =>
       jsonResponse({ data: [{ url: "https://cdn.example.com/cat.png" }] }, 200, REQUEST_ID),
     );
 
-    const parsed = await callImageApi({
-      provider: provider(),
+    const parsed = await callApi({
+      binding: bindingOf(provider()),
       apiKey: API_KEY,
       request: imageRequest(),
     });
@@ -97,19 +177,39 @@ describe("callImageApi", () => {
     expect(parsed.failures).toEqual([]);
   });
 
-  it("appends the dialect endpoint to base_url", async () => {
+  it("appends the adapter path, which starts at the origin, to base_url", async () => {
     const fetchMock = stubFetch(() =>
       jsonResponse({ data: [{ url: "https://cdn.example.com/1.png" }] }),
     );
 
-    await callImageApi({
-      provider: provider({ api_type: "ark", base_url: "https://proxy.example.com/api/v3" }),
+    await callApi({
+      binding: bindingOf(provider({
+        name: "volcengine",
+        api_type: "ark",
+        base_url: "https://ark.cn-beijing.volces.com",
+      })),
       apiKey: API_KEY,
       request: imageRequest(),
     });
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "https://proxy.example.com/api/v3/images/generations",
+      "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+    );
+  });
+
+  it("reaches the qwen images endpoint through the workspace host's compatible-mode prefix", async () => {
+    const fetchMock = stubFetch(() =>
+      jsonResponse({ data: [{ url: "https://cdn.example.com/1.png" }] }),
+    );
+
+    await callApi({
+      binding: bindingOf(provider({ base_url: "https://abc.cn-beijing.maas.aliyuncs.com" })),
+      apiKey: API_KEY,
+      request: imageRequest(),
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://abc.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/images/generations",
     );
   });
 
@@ -118,8 +218,8 @@ describe("callImageApi", () => {
       jsonResponse({ data: [{ url: "https://cdn.example.com/cat.png" }] }, 200, REQUEST_ID),
     );
 
-    const parsed = await callImageApi({
-      provider: provider(),
+    const parsed = await callApi({
+      binding: bindingOf(provider()),
       apiKey: API_KEY,
       request: imageRequest(),
     });
@@ -135,8 +235,8 @@ describe("callImageApi", () => {
       }),
     );
 
-    const parsed = await callImageApi({
-      provider: provider(),
+    const parsed = await callApi({
+      binding: bindingOf(provider()),
       apiKey: API_KEY,
       request: imageRequest(),
     });
@@ -154,7 +254,7 @@ describe("callImageApi", () => {
     );
 
     const error = await rejection(
-      callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -171,7 +271,7 @@ describe("callImageApi", () => {
     );
 
     const error = await rejection(
-      callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -187,7 +287,7 @@ describe("callImageApi", () => {
     stubFetch(() => new Response("", { status: 200 }));
 
     const error = await rejection(
-      callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -214,7 +314,7 @@ describe("callImageApi", () => {
     );
 
     const error = await rejection(
-      callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(requestedTimeoutMs).toBe(REQUEST_TIMEOUT_MS);
@@ -226,7 +326,7 @@ describe("callImageApi", () => {
     stubFetch(() => Promise.reject(new TypeError("fetch failed")));
 
     const error = await rejection(
-      callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -245,7 +345,7 @@ describe("callImageApi", () => {
     stubFetch(() => response);
 
     const error = await rejection(
-      callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -257,8 +357,8 @@ describe("callImageApi", () => {
     const fetchMock = stubFetch(() => jsonResponse({}, 200));
 
     const error = await rejection(
-      callImageApi({
-        provider: provider(),
+      callApi({
+        binding: bindingOf(provider()),
         apiKey: API_KEY,
         request: imageRequest({ output_format: "png" }),
       }),
@@ -275,7 +375,7 @@ describe("callImageApi", () => {
     stubFetch(() => jsonResponse({}, 200));
 
     const error = await rejection(
-      callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -297,7 +397,7 @@ describe("callImageApi", () => {
     for (const impl of failures) {
       stubFetch(impl);
       const error = await rejection(
-        callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+        callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
       );
       expect(error.message).not.toContain(API_KEY);
     }
@@ -314,7 +414,7 @@ describe("callImageApi", () => {
     for (const response of responses) {
       stubFetch(() => response);
       const error = await rejection(
-        callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+        callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
       );
       expect(error).toBeInstanceOf(ApiError);
       expect(error.message).not.toContain(API_KEY);
@@ -331,7 +431,7 @@ describe("callImageApi", () => {
       );
 
       const error = await rejection(
-        callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+        callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
       );
 
       expect(error).toBeInstanceOf(ApiError);
@@ -348,7 +448,7 @@ describe("callImageApi", () => {
     stubFetch(() => jsonResponse({ error: { code: 40001, message: "invalid parameter" } }, 400));
 
     const error = await rejection(
-      callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -363,7 +463,7 @@ describe("callImageApi", () => {
     );
 
     const error = await rejection(
-      callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect((error as ApiError).code).toBeUndefined();
@@ -379,7 +479,7 @@ describe("callImageApi", () => {
     );
 
     const error = await rejection(
-      callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -395,7 +495,7 @@ describe("callImageApi", () => {
     const request = imageRequest({ prompt: 10n as unknown as string });
 
     const error = await rejection(
-      callImageApi({ provider: provider(), apiKey: API_KEY, request }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request }),
     );
 
     expect(error).not.toBeInstanceOf(ApiError);
@@ -405,13 +505,12 @@ describe("callImageApi", () => {
   });
 });
 
-describe("callImageApi: a 404 with an empty body", () => {
+describe("callApi: a 404 with an empty body", () => {
   function arkProvider(): ProviderConfig {
     return provider({
       name: "ark",
       api_type: "ark",
-      base_url: "https://ark.cn-beijing.volces.com/api/v3",
-      model: "doubao-seedream-5-0-flash-260915",
+      base_url: "https://ark.cn-beijing.volces.com",
     });
   }
 
@@ -419,8 +518,8 @@ describe("callImageApi: a 404 with an empty body", () => {
     stubFetch(() => new Response("", { status: 404 }));
 
     const error = await rejection(
-      callImageApi({
-        provider: provider({ base_url: "https://dashscope.aliyuncs.com" }),
+      callApi({
+        binding: bindingOf(provider({ base_url: "https://dashscope.aliyuncs.com" })),
         apiKey: API_KEY,
         request: imageRequest(),
       }),
@@ -434,9 +533,9 @@ describe("callImageApi: a 404 with an empty body", () => {
     expect(error.message).not.toContain("mediagen login");
     expect(error.message).toContain("config.toml");
     expect(error.message).toContain(
-      'base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"',
+      'base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"',
     );
-    expect(error.message).toContain("version segment");
+    expect(error.message).toContain("appends the endpoint path");
     expect(error.message).not.toContain(API_KEY);
   });
 
@@ -444,8 +543,8 @@ describe("callImageApi: a 404 with an empty body", () => {
     stubFetch(() => new Response("", { status: 404 }));
 
     const error = await rejection(
-      callImageApi({
-        provider: provider({ name: "my-qwen", base_url: "https://relay.example.com" }),
+      callApi({
+        binding: bindingOf(provider({ name: "my-qwen", base_url: "https://relay.example.com" })),
         apiKey: API_KEY,
         request: imageRequest(),
       }),
@@ -460,7 +559,7 @@ describe("callImageApi: a 404 with an empty body", () => {
     stubFetch(() => new Response("", { status: 404 }));
 
     const error = await rejection(
-      callImageApi({ provider: arkProvider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(arkProvider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -473,7 +572,7 @@ describe("callImageApi: a 404 with an empty body", () => {
     stubFetch(() => jsonResponse({ error: { code: "ModelNotFound", message: "no such model" } }, 404));
 
     const error = await rejection(
-      callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error.message).toContain("no such model");
@@ -485,7 +584,7 @@ describe("callImageApi: a 404 with an empty body", () => {
     stubFetch(() => new Response("", { status: 503 }));
 
     const error = await rejection(
-      callImageApi({ provider: provider(), apiKey: API_KEY, request: imageRequest() }),
+      callApi({ binding: bindingOf(provider()), apiKey: API_KEY, request: imageRequest() }),
     );
 
     expect(error.message).toContain("503");

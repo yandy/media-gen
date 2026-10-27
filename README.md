@@ -13,10 +13,11 @@ npm install -g @yandy0725/mediagen-cli
 # validates it before the command runs; config show itself only reads it.
 mediagen config show
 
-# Add an entry (one dialect can back several, each with its own host and model)
+# Add an entry: one account (protocol + origin + key) with its image task table
 mediagen config add my-proxy --api-type qwen \
-  --base-url https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1 \
+  --base-url https://abc123.cn-beijing.maas.aliyuncs.com \
   --model qwen-image-3.0 --api-key-env DASHSCOPE_API_KEY
+# add --task video for a video table; another model is one more entry in models
 
 mediagen login --provider my-proxy --api-key sk-...
 
@@ -48,8 +49,10 @@ size reference, examples. Everything below is the short version.
 | `doubao-seedream-5-0-pro` | `--provider volcengine --model doubao-seedream-5-0-pro` | highest quality |
 
 `dashscope` and `volcengine` are the two provider names the first run writes into
-`config.toml`; rename them freely, or copy a section to add more entries. Ids are
-dated snapshots, so override any of them with `--model` or in `config.toml`.
+`config.toml`; rename them freely. A model is usable only if it is listed in
+`models = [...]` under that provider's `image` table, and a second model of the same
+vendor is one more entry there — never another provider. Ids are dated snapshots, so
+edit `models` (and `default`) in `config.toml` as they roll forward.
 `--size` takes a tier (`2K`), pixels (`2048x2048`), or `auto` (qwen only); `--n`
 takes 1-6 — on ark each image is a separate paid request. Vendor-specific flags
 (`--negative-prompt` is qwen-only, `--output-format` is ark-only) fail before
@@ -73,43 +76,87 @@ retried.
 
 ## Configuration
 
-`config.toml` and `auth.json` (mode `600`) live in the first of
-`$MEDIAGEN_CLI_CONFIG_DIR`, `$XDG_CONFIG_HOME/mediagen-cli`,
-`~/.config/mediagen-cli`.
+`config.toml` — the file you edit — lives in the first of
+`$MEDIAGEN_CLI_CONFIG_DIR`, `$XDG_CONFIG_HOME/mediagen-cli`, `~/.config/mediagen-cli`.
+
+`auth.json` (mode `600`) is **state, not config**, and lives apart from it: the first
+of `$MEDIAGEN_CLI_STATE_DIR`, `$XDG_STATE_HOME/mediagen-cli`,
+`~/.local/state/mediagen-cli`. `~/.config` is the directory people sync, share and
+commit; a key store there is one `.gitignore` mistake away from a leaked key. The
+state directory is machine-local by definition, which is what a device-bound
+credential is.
 
 ```toml
 default_provider = "volcengine"
 # output_dir = "./media-output"
 
-[providers.volcengine]
-api_type = "ark"
-base_url = "https://ark.cn-beijing.volces.com/api/v3"
-model = "doubao-seedream-5-0-flash-260915"
+[providers.volcengine]              # the account: protocol, host, key
+api_type    = "ark"
+base_url    = "https://ark.cn-beijing.volces.com"
 api_key_env = "ARK_API_KEY"
 
+[providers.volcengine.image]        # what that account can do, one table per task
+default = "doubao-seedream-5-0-flash-260915"
+models  = ["doubao-seedream-5-0-flash-260915", "doubao-seedream-5-0-pro"]
+
+[providers.volcengine.video]
+default = "doubao-seedance-1-0-pro"
+models  = ["doubao-seedance-1-0-pro"]
+
 [providers.dashscope]
-api_type = "qwen"
-base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-model = "qwen-image-3.0"
+api_type    = "qwen"
+base_url    = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"
 api_key_env = "DASHSCOPE_API_KEY"
 
-[providers.my-proxy]              # a second entry of the same dialect
-api_type = "qwen"
-base_url = "https://proxy.example.com/my-gateway/v1"   # gateway prefix + version segment
-model = "qwen-image-3.0"
+[providers.dashscope.image]
+default = "qwen-image-3.0"
+models  = ["qwen-image-3.0"]
+
+[providers.my-proxy]                # a second account of the same protocol
+api_type    = "qwen"
+base_url    = "https://proxy.example.com/my-gateway"   # a gateway prefix is fine
 api_key_env = "MY_PROXY_KEY"
+
+[providers.my-proxy.image]
+default = "qwen-image-3.0"
+models  = ["qwen-image-3.0"]
 ```
 
-A provider is one API dialect (`api_type`, either `qwen` or `ark`) plus one concrete
-entry point (`base_url` + `model`). Those three fields are required; `api_key_env` is
-optional. **`base_url` runs up to the version segment** — the dialect appends the
-endpoint file name (`/images/generations`) for you, so `https://host/v1` yields
-`https://host/v1/images/generations`; writing the version segment twice yields
-`.../compatible-mode/v1/compatible-mode/v1/images/generations`, which 404s. The file
-is the only source of truth: nothing is built in, and the first run just writes the
-above into `config.toml` for you to edit. The seeded qwen entry carries a
-`<workspace-id>` placeholder which every command rejects before spending anything,
-so only that line needs your attention.
+A provider is **one account**: a protocol (`api_type`, `qwen` or `ark`), one host
+(`base_url`) and an optional `api_key_env`. Each task it serves hangs off it by name
+(`[providers.<name>.image]`, `[providers.<name>.video]`), and lists the model ids you
+allow there plus the `default` used when `--model` is absent. `timeout_seconds` is
+optional per task (300 for image, 1800 for video). Two models of the same vendor are
+two entries in one `models` list, not two providers.
+
+**`base_url` is the origin** — an optional gateway prefix, never a version segment.
+The version segment belongs to the endpoint, which the dialect owns per task
+(`/api/v3/images/generations`, `/compatible-mode/v1/images/generations`), so switching
+task changes only the path. A `base_url` that still ends with `/api/v3`, `/api/v1` or
+`/compatible-mode/v1` on a vendor host is refused before any request, with the origin
+to paste in. The file is the only source of truth: nothing is built in, and the first
+run just writes the above into `config.toml` for you to edit. The seeded qwen entry
+carries a `<workspace-id>` placeholder which commands reject before spending anything
+when that provider is the one selected, so only that line needs your attention.
+
+**A host whose API does not live at the vendor's own path** — a gateway, or a plan
+that serves `/api/plan/v3` instead of `/api/v3` — declares that prefix on the task
+with `path`, and the adapter appends nothing:
+
+```toml
+[providers.volcengine]
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+
+[providers.volcengine.image]
+path = "/images/generations"        # request goes to .../api/plan/v3/images/generations
+```
+
+Without `path`, a sub-path under a vendor's own domain is refused before any request
+(it would be doubled), with the origin or the `path` value to use. `path` is only for
+hosts that do not mirror the vendor's layout; the adapter's own path stays the default.
+
+`video` tables parse and are validated, but no dialect has a video adapter yet: a
+video task reports exactly that and `config show` prints no endpoint for it.
 
 A key belongs to a provider entry: `--api-key`, else that entry's `api_key_env`,
 else `auth.json`. There is no dialect-level default key variable, so two entries of
@@ -117,9 +164,10 @@ the same dialect can use different keys. Keys are only ever printed masked.
 `base_url` lives in the file (with a one-off `--base-url` override on
 `image generate`), and it is validated before any request: for
 qwen, the public host answers the images endpoint with a `404`, so the seed keeps a
-placeholder that fails loudly instead. `mediagen config show` prints the endpoint
-each provider would actually hit. Set `NODE_USE_ENV_PROXY=1` on Node >= 24
-to honour `HTTP_PROXY`. Timeouts: 300 s per request, 120 s per download.
+placeholder that fails loudly instead. `mediagen config show` prints each provider's
+tasks, their models, and the endpoint each one would actually hit. Set
+`NODE_USE_ENV_PROXY=1` on Node >= 24 to honour `HTTP_PROXY`. Timeouts: per request
+`timeout_seconds` for the task (default 300 s, video 1800 s), 120 s per download.
 
 Working from an agent? `skills/mediagen/SKILL.md` says when to reach for this CLI.
 

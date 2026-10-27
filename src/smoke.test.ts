@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main } from "./cli.js";
+import { loadConfig } from "./config.js";
 
 /**
  * End-to-end smoke test: the real `main()` from src/cli.ts, the real config
@@ -25,6 +26,8 @@ const IMAGE_BYTES = Buffer.from([
 const TRACKED_ENV = [
   "MEDIAGEN_CLI_CONFIG_DIR",
   "XDG_CONFIG_HOME",
+  "XDG_STATE_HOME",
+  "MEDIAGEN_CLI_STATE_DIR",
   "DASHSCOPE_API_KEY",
   "ARK_API_KEY",
 ] as const;
@@ -47,6 +50,7 @@ let originalEnv: Record<string, string | undefined> = {};
 function smokeEnv(): NodeJS.ProcessEnv {
   return {
     MEDIAGEN_CLI_CONFIG_DIR: configDir,
+    MEDIAGEN_CLI_STATE_DIR: path.join(tempDir, "state"),
     DASHSCOPE_API_KEY: QWEN_KEY,
     ARK_API_KEY: ARK_KEY,
   };
@@ -79,15 +83,21 @@ beforeEach(() => {
       "",
       "[providers.dashscope]",
       'api_type = "qwen"',
-      'base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"',
-      'model = "qwen-image-3.0"',
+      'base_url = "https://dashscope.aliyuncs.com"',
       'api_key_env = "DASHSCOPE_API_KEY"',
+      "",
+      "[providers.dashscope.image]",
+      'default = "qwen-image-3.0"',
+      'models = ["qwen-image-3.0"]',
       "",
       "[providers.volcengine]",
       'api_type = "ark"',
-      'base_url = "https://ark.cn-beijing.volces.com/api/v3"',
-      'model = "doubao-seedream-5-0-flash-260915"',
+      'base_url = "https://ark.cn-beijing.volces.com"',
       'api_key_env = "ARK_API_KEY"',
+      "",
+      "[providers.volcengine.image]",
+      'default = "doubao-seedream-5-0-flash-260915"',
+      'models = ["doubao-seedream-5-0-flash-260915"]',
       "",
     ].join("\n"),
   );
@@ -287,5 +297,52 @@ describe("smoke: API failure", () => {
     expect(fs.existsSync(outDir)).toBe(true);
     expect(fs.readdirSync(outDir)).toEqual([]);
     expect(stdout()).not.toContain(QWEN_KEY);
+  });
+});
+
+describe("smoke: the seeded config", () => {
+  // Each test starts with no config.toml, so main() writes the real seed.
+  beforeEach(() => {
+    fs.rmSync(path.join(configDir, "config.toml"), { force: true });
+  });
+
+  it("ships a seed that parses, defaults to volcengine, and offers two image models", async () => {
+    const code = await main(["config", "show", "--json"]);
+
+    expect(code).toBe(0);
+    const config = loadConfig();
+    expect(config.default_provider).toBe("volcengine");
+    expect(config.providers.volcengine.tasks.image?.models).toEqual([
+      "doubao-seedream-5-0-flash-260915",
+      "doubao-seedream-5-0-pro",
+    ]);
+    expect(config.providers.volcengine.tasks.video?.models).toEqual(["doubao-seedance-1-0-pro"]);
+  });
+
+  it("keeps the unedited dashscope placeholder from blocking volcengine", async () => {
+    const calls = stubFetch(() =>
+      new Response(
+        JSON.stringify({ data: [{ url: IMAGE_URL }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    // The seed's output_dir is commented out, so a run without --out-dir would
+    // write into process.cwd() and leave a PNG in the repository.
+    const seededOut = path.join(tempDir, "seeded-out");
+    const code = await main([
+      "image", "generate", "a cat",
+      "--provider", "volcengine",
+      "--out-dir", seededOut,
+      "--json",
+    ]);
+
+    expect(code).toBe(0);
+    // The dashscope entry is still `<workspace-id>`; it must not matter here.
+    expect(calls[0]?.url).toBe(ARK_URL);
+    expect(fs.readdirSync(seededOut)).toHaveLength(1);
+    expect(fs.readFileSync(path.join(configDir, "config.toml"), "utf8")).toContain(
+      "<workspace-id>",
+    );
   });
 });

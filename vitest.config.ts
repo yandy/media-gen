@@ -10,5 +10,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     exclude: ["**/node_modules/**", "**/dist/**", "**/.worktrees/**"],
+    // Isolates HOME/XDG/config for every file, and fails a file that dirties the
+    // repository root. See vitest.sandbox.ts.
+    setupFiles: ["./vitest.sandbox.ts"],
   },
 });

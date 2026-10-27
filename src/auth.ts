@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { configDir } from "./config.js";
+import { stateDir } from "./config.js";
 import { ConfigError, malformedDocumentMessage, unreadableFileMessage } from "./errors.js";
 import type { ProviderConfig } from "./types.js";
 
@@ -25,8 +25,9 @@ export interface StoredApiKey {
   source: StoredKeySource;
 }
 
+/** The API key store: state, never config — see stateDir(). */
 export function authPath(): string {
-  return path.join(configDir(), "auth.json");
+  return path.join(stateDir(), "auth.json");
 }
 
 export function loadAuth(): AuthFile {

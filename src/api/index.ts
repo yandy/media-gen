@@ -1,33 +1,47 @@
 import { ConfigError } from "../errors.js";
-import type { Dialect, DialectAdapter } from "../types.js";
+import type { Dialect, DialectAdapters, Task, TaskAdapter } from "../types.js";
 import { ArkDialect } from "./ark.js";
 import { QwenDialect } from "./qwen.js";
 
-const DIALECTS: Record<Dialect, DialectAdapter> = {
-  qwen: QwenDialect,
-  ark: ArkDialect,
+/**
+ * One adapter per (dialect, task). Adding a task type to a dialect is a new row
+ * here, never a new dialect: the dialect is the protocol, the task is the
+ * endpoint. `config.toml` is user-supplied, so every lookup is checked at
+ * runtime against the keys that actually exist.
+ */
+const DIALECTS: Record<Dialect, DialectAdapters> = {
+  qwen: { image: QwenDialect },
+  ark: { image: ArkDialect },
 };
 
 /**
- * Resolve the wire-format adapter for a provider's `api_type`. The lookup is
- * checked at runtime because `config.toml` is user-supplied and may carry any
- * string in an `api_type` field.
+ * The adapter's path for a dialect and task, or undefined when either is
+ * unknown or the task has no endpoint yet. Callers that must not throw —
+ * `config show` on a half-written file, or a provider whose only table is
+ * video — use this instead of getAdapter().
  */
-/**
- * The dialect's endpoint file name, or undefined for an api_type no adapter
- * claims. Callers that must not throw — `config show` on a half-written file —
- * use this instead of getDialect().
- */
-export function dialectPath(apiType: string): string | undefined {
-  return Object.hasOwn(DIALECTS, apiType) ? DIALECTS[apiType as Dialect].path : undefined;
+export function adapterPath(apiType: string, task: Task): string | undefined {
+  if (!Object.hasOwn(DIALECTS, apiType)) return undefined;
+  return DIALECTS[apiType as Dialect][task]?.createPath;
 }
 
-export function getDialect(apiType: Dialect): DialectAdapter {
+export function getAdapter(apiType: Dialect, task: Task): TaskAdapter {
   if (!Object.hasOwn(DIALECTS, apiType)) {
     const allowed = Object.keys(DIALECTS).join(", ");
     throw new ConfigError(
       `unknown api_type "${String(apiType)}"; expected one of: ${allowed}`,
     );
   }
-  return DIALECTS[apiType];
+
+  const adapters = DIALECTS[apiType];
+  const adapter = adapters[task];
+  if (adapter === undefined) {
+    // Naming the tasks that do exist turns "video is missing" into a one-line
+    // diagnosis instead of a hunt through the source.
+    throw new ConfigError(
+      `the "${apiType}" dialect has no "${task}" adapter yet; ` +
+        `implemented tasks: ${Object.keys(adapters).join(", ")}`,
+    );
+  }
+  return adapter;
 }

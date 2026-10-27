@@ -2,12 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import { shellArg } from "./toml.js";
 import path from "node:path";
-import { getDialect } from "./api/index.js";
+import { getAdapter } from "./api/index.js";
 import { resolveApiKey } from "./auth.js";
-import { loadConfig, resolveProvider } from "./config.js";
+import { loadConfig, vendorPathIssue, resolveSelection } from "./config.js";
 import { downloadImage } from "./download.js";
 import { ApiError, ConfigError, UsageError } from "./errors.js";
-import { callImageApi } from "./http.js";
+import { callApi } from "./http.js";
 import type {
   Dialect,
   ImageRequest,
@@ -98,7 +98,18 @@ function normalizeBaseUrl(value: string): string {
   const normalized = normalizeHttpBaseUrl(value);
   if (normalized === undefined) {
     throw new UsageError(
-      `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) URL without credentials, query or fragment`,
+      `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) origin ` +
+        `without credentials, query or fragment`,
+    );
+  }
+
+  // The same rule the file obeys: the version segment belongs to the adapter, so
+  // a flag that still carries one would double it and 404 after paying.
+  const issue = vendorPathIssue(normalized);
+  if (issue !== undefined) {
+    throw new UsageError(
+      `invalid --base-url ${JSON.stringify(value)}: it points at the sub-path "${issue.prefix}", ` +
+        `and the dialect appends its own path; set base_url to the origin, e.g. "${issue.origin}"`,
     );
   }
   return normalized;
@@ -272,17 +283,23 @@ export async function runGenerate(
   const baseUrl = opts.baseUrl === undefined ? undefined : normalizeBaseUrl(opts.baseUrl);
 
   const config = loadConfig();
-  const resolved = resolveProvider(opts.provider ?? config.default_provider, config);
-  const provider = baseUrl === undefined ? resolved : { ...resolved, base_url: baseUrl };
+  // The file's values are validated before --base-url may override one of them:
+  // a one-off flag must not be able to hide a broken config.toml.
+  const binding = resolveSelection(
+    { provider: opts.provider, model: opts.model, task: "image" },
+    config,
+  );
+  const provider = baseUrl === undefined ? binding.provider : { ...binding.provider, base_url: baseUrl };
+  const resolved: typeof binding = { ...binding, provider };
 
-  const dialect = getDialect(provider.api_type);
+  const adapter = getAdapter(provider.api_type, "image");
   if (opts.size !== undefined) validateSize(opts.size, provider.api_type);
-  const model = opts.model ?? provider.model;
+  const model = resolved.model;
 
   // Build once with the raw references so the adapter can reject flags this
   // dialect does not accept, then swap in the prepared image inputs.
   const draft = buildImageRequest(prompt, opts, model, opts.images, n, seed);
-  dialect.buildRequest(draft);
+  adapter.buildRequest(draft);
   const request: ImageRequest = { ...draft, images: draft.images.map(toImageInput) };
 
   const auth = resolveApiKey(provider, opts.apiKey, env);
@@ -295,10 +312,10 @@ export async function runGenerate(
     provider.api_type === "ark" && n > 1 ? fanOut(request, n, seed) : [request];
   const responses =
     fanOutRequests.length === 1
-      ? [await callImageApi({ provider, apiKey: auth.key, request: fanOutRequests[0] })]
+      ? [await callApi({ binding: resolved, apiKey: auth.key, request: fanOutRequests[0] })]
       : await Promise.all(
           fanOutRequests.map((sub) =>
-            callImageApi({ provider, apiKey: auth.key, request: sub }).catch(failedResponse),
+            callApi({ binding: resolved, apiKey: auth.key, request: sub }).catch(failedResponse),
           ),
         );
 

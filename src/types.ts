@@ -1,10 +1,10 @@
 export type Dialect = "qwen" | "ark";
 
+/** A provider is the ledger — protocol, origin, credentials — never a model. */
 export interface ProviderConfig {
   name: string;
   api_type: Dialect;
   base_url: string;
-  model: string;
   api_key_env?: string;
 }
 
@@ -45,12 +45,33 @@ export interface ParsedResponse {
   requestId?: string;
 }
 
-export interface DialectAdapter {
-  /** Endpoint file name, appended to the provider's base_url. */
-  path: string;
+/** Everything one run needs to know: which provider, which task, which model, how long. */
+export interface TaskBinding {
+  provider: ProviderConfig;
+  task: Task;
+  model: string;
+  timeout_ms: number;
+  /** A task's own endpoint path, for hosts whose layout differs from the vendor's. */
+  path?: string;
+}
+
+/** What a provider can be asked to produce. Each task has its own endpoint and adapter. */
+export type Task = "image" | "video";
+
+/**
+ * One task's wire format for one dialect. `createPath` starts at the origin and
+ * carries the version/API prefix itself (`/api/v3/images/generations`), so
+ * `base_url` stays a single per-provider origin no matter how many tasks the
+ * provider serves.
+ */
+export interface TaskAdapter {
+  createPath: string;
   buildRequest(req: ImageRequest): unknown;
   parseResponse(json: unknown, requestId?: string): ParsedResponse;
 }
+
+/** Which tasks this dialect implements; a task absent here has no endpoint yet. */
+export type DialectAdapters = Partial<Record<Task, TaskAdapter>>;
 
 export interface SavedFile {
   path: string;

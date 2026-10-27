@@ -1,9 +1,9 @@
 import { ApiError, UsageError } from "../errors.js";
 import type {
-  DialectAdapter,
   ImageRequest,
   ImageResult,
   ParsedResponse,
+  TaskAdapter,
 } from "../types.js";
 
 /**
@@ -110,8 +110,8 @@ export function parseQwenResponse(json: unknown, requestId?: string): ParsedResp
   return parsed;
 }
 
-export const QwenDialect: DialectAdapter = {
-  path: "/images/generations",
+export const QwenDialect: TaskAdapter = {
+  createPath: "/compatible-mode/v1/images/generations",
   buildRequest: buildQwenRequest,
   parseResponse: parseQwenResponse,
 };
