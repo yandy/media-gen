@@ -9,7 +9,8 @@ interactive prompts, `--json` for programs.
 ```bash
 npm install -g @yandy0725/mediagen-cli
 
-# The first run writes a commented config.toml; edit it directly.
+# Any command creates a commented config.toml on first use, and every run
+# validates it before the command runs; config show itself only reads it.
 mediagen config show
 
 # Add an entry (one dialect can back several, each with its own host and model)

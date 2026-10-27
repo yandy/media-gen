@@ -24,11 +24,12 @@ file and prints the path. Each successful call is a paid API request.
 
 ## One-time setup
 
-Nothing is built in: a provider is declared in `config.toml`, which the first run
-writes with two commented entries (`dashscope`, `volcengine`).
+Nothing is built in: a provider is declared in `config.toml`, which any command
+creates on first use (with two commented entries: `dashscope`, `volcengine`) and
+then validates before it runs.
 
 ```bash
-mediagen config show        # first run creates config.toml; this prints what resolves
+mediagen config show        # prints what resolves; any command creates config.toml on first use
 ```
 
 qwen needs its workspace-scoped host, and the public host 404s, so edit

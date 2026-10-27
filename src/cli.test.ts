@@ -345,6 +345,19 @@ describe("mediagen config path", () => {
 });
 
 describe("mediagen config show", () => {
+  it("never writes the file it reads", async () => {
+    writeConfig('default_provider = "mine"\n');
+    const before = fs.readFileSync(configPath(), "utf8");
+    const mtimeBefore = fs.statSync(configPath()).mtimeMs;
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(fs.readFileSync(configPath(), "utf8")).toBe(before);
+    expect(fs.statSync(configPath()).mtimeMs).toBe(mtimeBefore);
+    expect(result.stdout).toContain("(loaded)");
+  });
+
   it("prints the seeded configuration with a source note for each value", async () => {
     const result = await run(["config", "show"]);
 

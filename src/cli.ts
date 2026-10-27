@@ -119,7 +119,7 @@ const ROOT_HELP = `
 Built for AI agents: explicit flags, no interactive prompts, machine-readable output.
 
 Quickstart:
-  mediagen config show                                    # first run writes a commented config.toml
+  mediagen config show                                    # any command creates config.toml on first use
   mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com --model qwen-image-3.0
   mediagen login --provider my-proxy --api-key sk-...      # store a key in auth.json
   mediagen image generate "a red fox in fresh snow" --provider my-proxy --out-dir ./out
@@ -741,8 +741,8 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
   }
 
   const file = configPath();
-  // loadConfig() also seeds the file when it is absent, so the append below sees
-  // the same surroundings the user will.
+  // The bootstrap in main() already created and validated this file, so the
+  // append below sees exactly what the user will edit.
   const config = loadConfig();
   if (Object.hasOwn(config.providers, provider)) {
     // True whether the name is a real entry or a table that already nests one
@@ -815,7 +815,7 @@ function runConfigShow(flags: { json?: boolean }): void {
   }
 
   const lines = [
-    `config file: ${file} (${exists ? "loaded" : "could not be created"})`,
+    `config file: ${file} (loaded)`,
     `default_provider: ${
       defaultProvider.value === "" ? `(not set) (${defaultProvider.source})` : show(defaultProvider)
     }`,
