@@ -433,6 +433,10 @@ describe("callImageApi: a 404 with an empty body", () => {
     // The remedy lives in config.toml; there is no login flag for a host any more.
     expect(error.message).not.toContain("mediagen login");
     expect(error.message).toContain("config.toml");
+    expect(error.message).toContain(
+      'base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"',
+    );
+    expect(error.message).toContain("version segment");
     expect(error.message).not.toContain(API_KEY);
   });
 
