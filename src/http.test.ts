@@ -559,6 +559,24 @@ describe("callApi: a 404 with an empty body", () => {
     expect(error.message).toContain("maas.aliyuncs.com");
   });
 
+  it("leaves a dashscope 404 on the normal path, with no workspace-host remedy", async () => {
+    stubFetch(() => new Response("", { status: 404 }));
+
+    const error = await rejection(
+      callApi({
+        binding: bindingOf(
+          provider({ name: "gw", api_type: "dashscope", base_url: "https://gw.example.com" }),
+        ),
+        apiKey: API_KEY,
+        request: imageRequest(),
+      }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toContain("404");
+    expect(error.message).not.toContain("maas.aliyuncs.com");
+  });
+
   it("leaves an ark 404 on the normal path", async () => {
     stubFetch(() => new Response("", { status: 404 }));
 

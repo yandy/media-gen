@@ -870,6 +870,30 @@ models = ["m"]
     expect(resolveSelection({ provider: "gw", task: "image" }, config).dialect).toBe("ark");
   });
 
+  it("resolves each task to its own protocol on one account", () => {
+    writeConfig(`
+[providers.gw]
+base_url = "https://gw.example.com"
+
+[providers.gw.image]
+api_type = "dashscope"
+default = "m"
+models = ["m"]
+
+[providers.gw.video]
+api_type = "ark"
+default = "v"
+models = ["v"]
+`);
+    const config = loadConfig();
+    expect(resolveSelection({ provider: "gw", task: "image" }, config).dialect).toBe("dashscope");
+    // The video half resolves to ark, which has no video adapter yet: reaching
+    // that error proves the task's own protocol was the one that applied.
+    expect(thrownBy(() => resolveSelection({ provider: "gw", task: "video" }, config)).message).toMatch(
+      /the "ark" dialect has no "video" adapter yet/,
+    );
+  });
+
   it("names the task table when no protocol is declared anywhere", () => {
     writeConfig(`
 [providers.gw]

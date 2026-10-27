@@ -15,6 +15,18 @@ function thrownBy(action: () => unknown): Error {
   throw new Error("expected the action to throw, but it returned normally");
 }
 
+describe("the dashscope dialect", () => {
+  it("serves image from the native multimodal endpoint", () => {
+    expect(getAdapter("dashscope", "image").createPath).toBe(
+      "/api/v1/services/aigc/multimodal-generation/generation",
+    );
+  });
+
+  it("has no video adapter yet", () => {
+    expect(() => getAdapter("dashscope", "video")).toThrow(/no "video" adapter yet/);
+  });
+});
+
 describe("getAdapter", () => {
   it("returns the dialect's image adapter", () => {
     expect(getAdapter("openai", "image")).toBe(QwenDialect);

@@ -1,6 +1,7 @@
 import { ConfigError } from "../errors.js";
 import type { Dialect, DialectAdapters, Task, TaskAdapter } from "../types.js";
 import { ArkDialect } from "./ark.js";
+import { DashscopeDialect } from "./dashscope.js";
 import { QwenDialect } from "./qwen.js";
 
 /**
@@ -11,9 +12,9 @@ import { QwenDialect } from "./qwen.js";
  */
 const DIALECTS: Record<Dialect, DialectAdapters> = {
   openai: { image: QwenDialect },
-  // Registered before its adapters exist so that `config.toml` naming it gets
-  // "no image adapter yet" rather than "unknown api_type".
-  dashscope: {},
+  // The native DashScope protocol: one sync endpoint for images, and the video
+  // task (build → poll → fetch) lands as a second adapter in the same family.
+  dashscope: { image: DashscopeDialect },
   ark: { image: ArkDialect },
 };
 
