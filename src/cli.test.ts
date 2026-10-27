@@ -1519,6 +1519,26 @@ models = ["doubao-seedance-1-0-pro"]
     expect(result.stdout.match(/\(no adapter yet\)/g) ?? []).toHaveLength(1);
   });
 
+  it("prints a task's path override and the URL it produces", async () => {
+    writeConfig(`[providers.ark-plan]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+
+[providers.ark-plan.image]
+default = "m"
+models = ["m"]
+path = "/images/generations"
+`);
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("path: /images/generations (config.toml)");
+    expect(result.stdout).toContain(
+      "endpoint: https://ark.cn-beijing.volces.com/api/plan/v3/images/generations (computed)",
+    );
+  });
+
   it("names a missing api_type instead of blaming the adapter", async () => {
     writeConfig(`[providers.no-type]
 base_url = "https://proxy.example.com"
@@ -1549,7 +1569,7 @@ models = ["m"]
     expect(result.code).toBe(0);
     // The doubled path is exactly what resolution refuses; showing it would mislead.
     expect(result.stdout).not.toContain("/api/v3/api/v3");
-    expect(result.stdout).toContain('endpoint: (base_url still carries "/api/v3")');
+    expect(result.stdout).toContain("endpoint: (base_url carries a path; declare path = ... or use the origin)");
   });
 
   it("warns that a video table cannot be used yet", async () => {
@@ -1598,8 +1618,8 @@ models = ["m"]
     ]);
 
     expect(result.code).toBe(2);
-    expect(result.stderr).toContain('ends with the API prefix "/api/v3"');
-    expect(result.stderr).toContain("pass the origin instead");
+    expect(result.stderr).toContain('it points at the sub-path "/api/v3"');
+    expect(result.stderr).toContain("set base_url to the origin");
     expect(readConfig()).toBe(before);
   });
 });

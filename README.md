@@ -133,6 +133,22 @@ run just writes the above into `config.toml` for you to edit. The seeded qwen en
 carries a `<workspace-id>` placeholder which commands reject before spending anything
 when that provider is the one selected, so only that line needs your attention.
 
+**A host whose API does not live at the vendor's own path** — a gateway, or a plan
+that serves `/api/plan/v3` instead of `/api/v3` — declares that prefix on the task
+with `path`, and the adapter appends nothing:
+
+```toml
+[providers.volcengine]
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+
+[providers.volcengine.image]
+path = "/images/generations"        # request goes to .../api/plan/v3/images/generations
+```
+
+Without `path`, a sub-path under a vendor's own domain is refused before any request
+(it would be doubled), with the origin or the `path` value to use. `path` is only for
+hosts that do not mirror the vendor's layout; the adapter's own path stays the default.
+
 `video` tables parse and are validated, but no dialect has a video adapter yet: a
 video task reports exactly that and `config show` prints no endpoint for it.
 

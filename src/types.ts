@@ -51,6 +51,8 @@ export interface TaskBinding {
   task: Task;
   model: string;
   timeout_ms: number;
+  /** A task's own endpoint path, for hosts whose layout differs from the vendor's. */
+  path?: string;
 }
 
 /** What a provider can be asked to produce. Each task has its own endpoint and adapter. */

@@ -122,6 +122,34 @@ describe("callApi: the binding decides task and timeout", () => {
   });
 });
 
+describe("callApi: a task's path override", () => {
+  it("appends the declared path instead of the adapter's", async () => {
+    const fetchMock = stubFetch(() =>
+      jsonResponse({ data: [{ url: "https://cdn.example.com/1.png" }] }),
+    );
+
+    await callApi({
+      binding: {
+        provider: provider({
+          name: "ark-plan",
+          api_type: "ark",
+          base_url: "https://ark.cn-beijing.volces.com/api/plan/v3",
+        }),
+        task: "image",
+        model: "m",
+        timeout_ms: REQUEST_TIMEOUT_MS,
+        path: "/images/generations",
+      },
+      apiKey: API_KEY,
+      request: imageRequest(),
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://ark.cn-beijing.volces.com/api/plan/v3/images/generations",
+    );
+  });
+});
+
 describe("postAsImage", () => {
   it("POSTs the joined URL with bearer auth and the body built by the adapter", async () => {
     const fetchMock = stubFetch(() =>

@@ -653,8 +653,8 @@ models = ["some-model"]
     );
 
     expect(error).toBeInstanceOf(UsageError);
-    expect(error.message).toContain('ends with the API prefix "/api/v3"');
-    expect(error.message).toContain("pass the origin instead");
+    expect(error.message).toContain('it points at the sub-path "/api/v3"');
+    expect(error.message).toContain("Set base_url to the origin".toLowerCase());
     expect(forbidden).not.toHaveBeenCalled();
   });
 

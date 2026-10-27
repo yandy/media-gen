@@ -125,6 +125,21 @@ models  = ["qwen-image-3.0"]
 供你修改。种子 qwen 那条带 `<workspace-id>` 占位符，只有当它被选中时才会在花钱前报错，
 所以只需要改这一行。
 
+**如果某个主机的 API 不在厂商自己的路径下** —— 例如网关，或某个把 `/api/v3` 换成
+`/api/plan/v3` 的套餐 —— 在任务表上用 `path` 声明这段前缀，适配器就不再追加：
+
+```toml
+[providers.volcengine]
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+
+[providers.volcengine.image]
+path = "/images/generations"        # 请求打到 .../api/plan/v3/images/generations
+```
+
+不写 `path` 时，厂商自有域名下的子路径会在发请求前被拒绝（否则会被拼重复），并给出
+可用的 origin 或 `path` 值。`path` 只用于「不镜像厂商路径」的主机；平时适配器自带的
+路径仍是默认值。
+
 `video` 表能解析、能校验，但还没有任何方言实现视频适配器：视频任务会明确报这一点，
 `config show` 也不会为它打印 endpoint。
 

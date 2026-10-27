@@ -374,6 +374,38 @@ model = "m"
     );
   });
 
+  it("reads a task's path override", () => {
+    const config = taskConfig(`[providers.ark-plan]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+
+[providers.ark-plan.image]
+default = "m"
+models = ["m"]
+path = "/images/generations"
+`);
+
+    expect(config.providers["ark-plan"].tasks.image?.path).toBe("/images/generations");
+  });
+
+  it("rejects a path that is not absolute or carries a query", () => {
+    for (const bad of ["images/generations", "/images/generations?x=1", "/a#b", ""]) {
+      writeConfig(`[providers.p]
+api_type = "ark"
+base_url = "https://proxy.example.com"
+
+[providers.p.image]
+default = "m"
+models = ["m"]
+path = ${JSON.stringify(bad)}
+`);
+
+      expect(() => loadConfig()).toThrow(
+        "path under [providers.p.image] must start with \"/\" and carry no query or fragment",
+      );
+    }
+  });
+
   it("rejects an unknown key in a task table", () => {
     writeConfig(`[providers.volcengine]
 api_type = "ark"
@@ -596,25 +628,40 @@ timeout_seconds = 42
     expect(resolveSelection({ provider: "p", task: "image" }, config).timeout_ms).toBe(42_000);
   });
 
-  it("rejects a base_url that still carries the vendor API prefix", () => {
+  it("rejects any sub-path under a vendor's own host unless the task declares path", () => {
     const config = taskConfig(`[providers.volcengine]
 api_type = "ark"
-base_url = "https://ark.cn-beijing.volces.com/api/v3"
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
 
 [providers.volcengine.image]
 default = "m"
 models = ["m"]
 `);
 
-    expect(() => resolveSelection({ provider: "volcengine", task: "image" }, config)).toThrow(
-      'ends with the API prefix "/api/v3"',
-    );
-    expect(() => resolveSelection({ provider: "volcengine", task: "image" }, config)).toThrow(
-      'set base_url to the origin, e.g. "https://ark.cn-beijing.volces.com"',
-    );
+    const error = thrownBy(() => resolveSelection({ provider: "volcengine", task: "image" }, config));
+
+    expect(error.message).toContain("Set base_url to the origin");
+    expect(error.message).toContain('declare path = "/images/generations"');
   });
 
-  it("rejects a qwen base_url that still carries the compatible-mode prefix", () => {
+  it("allows a vendor sub-path when the task declares path, and uses it", () => {
+    const config = taskConfig(`[providers.volcengine]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+
+[providers.volcengine.image]
+default = "m"
+models = ["m"]
+path = "/images/generations"
+`);
+
+    const binding = resolveSelection({ provider: "volcengine", task: "image" }, config);
+
+    expect(binding.provider.base_url).toBe("https://ark.cn-beijing.volces.com/api/plan/v3");
+    expect(binding.path).toBe("/images/generations");
+  });
+
+  it("rejects a qwen sub-path under the workspace host too", () => {
     const config = taskConfig(`[providers.dashscope]
 api_type = "qwen"
 base_url = "https://abc.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
@@ -625,7 +672,7 @@ models = ["m"]
 `);
 
     expect(() => resolveSelection({ provider: "dashscope", task: "image" }, config)).toThrow(
-      'ends with the API prefix "/compatible-mode/v1"',
+      "Set base_url to the origin",
     );
   });
 
@@ -645,7 +692,7 @@ models = ["m"]
     expect(error.message).not.toContain("ending at the version segment");
   });
 
-  it("allows a version-looking prefix on a custom host", () => {
+  it("still allows a prefix on a custom host, which is not a vendor domain", () => {
     const config = taskConfig(`[providers.proxy]
 api_type = "qwen"
 base_url = "https://proxy.example.com/v1"

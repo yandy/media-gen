@@ -223,7 +223,8 @@ export async function callApi(params: CallApiParams): Promise<ParsedResponse> {
   const payload = JSON.stringify(body);
   const redact = redactorFor(apiKey);
 
-  const url = `${provider.base_url}${adapter.createPath}`;
+  // A task may declare its own path for a host that does not mirror the vendor.
+  const url = `${provider.base_url}${binding.path ?? adapter.createPath}`;
   const signal = AbortSignal.timeout(binding.timeout_ms);
 
   let response: Response;

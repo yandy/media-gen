@@ -4,7 +4,7 @@ import { shellArg } from "./toml.js";
 import path from "node:path";
 import { getAdapter } from "./api/index.js";
 import { resolveApiKey } from "./auth.js";
-import { loadConfig, originIssue, resolveSelection } from "./config.js";
+import { loadConfig, vendorPathIssue, resolveSelection } from "./config.js";
 import { downloadImage } from "./download.js";
 import { ApiError, ConfigError, UsageError } from "./errors.js";
 import { callApi } from "./http.js";
@@ -105,11 +105,11 @@ function normalizeBaseUrl(value: string): string {
 
   // The same rule the file obeys: the version segment belongs to the adapter, so
   // a flag that still carries one would double it and 404 after paying.
-  const issue = originIssue(normalized);
+  const issue = vendorPathIssue(normalized);
   if (issue !== undefined) {
     throw new UsageError(
-      `invalid --base-url ${JSON.stringify(value)}: it ends with the API prefix "${issue.prefix}", ` +
-        `which the dialect appends for you; pass the origin instead, e.g. "${issue.origin}"`,
+      `invalid --base-url ${JSON.stringify(value)}: it points at the sub-path "${issue.prefix}", ` +
+        `and the dialect appends its own path; set base_url to the origin, e.g. "${issue.origin}"`,
     );
   }
   return normalized;

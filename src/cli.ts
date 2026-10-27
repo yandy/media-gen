@@ -33,7 +33,7 @@ import { renderError, renderHuman, renderJson, type RenderedOutput } from "./out
 import { shellArg, tomlBasicString, tomlKey } from "./toml.js";
 import type { Task } from "./types.js";
 import { adapterPath } from "./api/index.js";
-import { originIssue } from "./config.js";
+import { vendorPathIssue } from "./config.js";
 import { normalizeHttpBaseUrl } from "./util.js";
 
 /**
@@ -72,6 +72,7 @@ interface TaskView {
   default?: ConfiguredValue;
   models?: string[];
   timeout_seconds?: number;
+  path?: ConfiguredValue;
   /** True when the value is the task's built-in default, not a configured one. */
   timeout_seconds_default?: boolean;
   /** Set when the endpoint cannot be computed, naming which half is missing. */
@@ -894,6 +895,9 @@ function runConfigShow(flags: { json?: boolean }): void {
       if (taskView.models !== undefined) {
         lines.push(`      models: ${taskView.models.join(", ")}`);
       }
+      if (taskView.path !== undefined) {
+        lines.push(`      path: ${show(taskView.path)}`);
+      }
       if (taskView.timeout_seconds !== undefined) {
         lines.push(
           `      timeout_seconds: ${taskView.timeout_seconds}` +
@@ -967,18 +971,22 @@ function buildProviderView(name: string, entry: ProviderEntry): ProviderView {
       taskView.timeout_seconds = block.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS[task];
       taskView.timeout_seconds_default = block.timeout_seconds === undefined;
 
+      if (block.path !== undefined) {
+        taskView.path = { value: block.path, source: "config.toml" };
+      }
       const path =
-        fields.api_type === undefined ? undefined : adapterPath(fields.api_type.value, task);
+        block.path ??
+        (fields.api_type === undefined ? undefined : adapterPath(fields.api_type.value, task));
       if (fields.api_type === undefined) {
         taskView.endpoint_note = "api_type is not set";
       } else if (path === undefined) {
         taskView.endpoint_note = "no adapter yet";
       } else if (base === undefined) {
         taskView.endpoint_note = "base_url is not a URL yet";
-      } else if (originIssue(base) !== undefined) {
+      } else if (block.path === undefined && vendorPathIssue(base) !== undefined) {
         // Printing the doubled path here would advertise a URL the validator
         // refuses, which is the one thing a diagnostic command must not do.
-        taskView.endpoint_note = `base_url still carries "${originIssue(base)?.prefix ?? ""}"`;
+        taskView.endpoint_note = "base_url carries a path; declare path = ... or use the origin";
       } else {
         taskView.endpoint = `${base}${path}`;
       }
@@ -1010,11 +1018,12 @@ function keyStatus(name: string, apiKeyEnv: string | undefined): KeyStatus {
  */
 function originBaseUrl(value: string): string {
   const normalized = normalizeBaseUrl(value);
-  const issue = originIssue(normalized);
+  const issue = vendorPathIssue(normalized);
   if (issue !== undefined) {
     throw new UsageError(
-      `invalid --base-url ${JSON.stringify(value)}: it ends with the API prefix "${issue.prefix}", ` +
-        `which the dialect appends for you; pass the origin instead, e.g. "${issue.origin}"`,
+      `invalid --base-url ${JSON.stringify(value)}: it points at the sub-path "${issue.prefix}", ` +
+        `and the dialect appends its own path; set base_url to the origin, e.g. "${issue.origin}", ` +
+        `or declare path = "<path from there>" on the task table by hand`,
     );
   }
   return normalized;

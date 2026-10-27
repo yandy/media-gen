@@ -7,7 +7,7 @@ import { ConfigError, malformedDocumentMessage, unreadableFileMessage, unwritabl
 import { SEED_CONFIG } from "./providers.js";
 import { shellArg, tomlKey } from "./toml.js";
 import { normalizeHttpBaseUrl } from "./util.js";
-import { getAdapter } from "./api/index.js";
+import { adapterPath, getAdapter } from "./api/index.js";
 import type { Dialect, ProviderConfig, Task, TaskBinding } from "./types.js";
 
 
@@ -110,18 +110,7 @@ export function prepareConfigFile(): void {
  */
 function resolveBaseUrl(name: string, apiType: Dialect, file: string, value: string): string {
   const normalized = normalizeHttpBaseUrl(value);
-  if (normalized !== undefined) {
-    const leftover = leftoverApiPrefix(normalized);
-    if (leftover !== undefined) {
-      throw new ConfigError(
-        `provider "${name}" has base_url ${JSON.stringify(value)} under ` +
-          `[providers.${tomlKey(name)}] in ${file}: it ends with the API prefix ` +
-          `"${leftover}", which the ${apiType} dialect appends for you; ` +
-          `set base_url to the origin, e.g. "${stripApiPrefix(normalized) ?? normalized}"`,
-      );
-    }
-    return normalized;
-  }
+  if (normalized !== undefined) return normalized;
 
   const table = `[providers.${tomlKey(name)}] in ${file}`;
   // The seed ships this placeholder, so it is the likeliest bad value in the
@@ -161,32 +150,42 @@ function readOptionalString(table: TomlTable, key: string, file: string): string
  * off every host the vendor does not own.
  */
 export interface OriginIssue {
-  /** The API prefix the value still carries. */
+  /** The sub-path the value still carries. */
   prefix: string;
-  /** The origin to use instead. */
+  /** The bare origin of that host. */
   origin: string;
 }
 
 /**
- * What is wrong with a base_url that means well but carries the endpoint's own
- * version prefix. Shared by the file and `--base-url`, so a flag can never skip
- * a check the file would fail.
+ * A sub-path on the vendor's own host. The adapter appends its own path to
+ * base_url, so anything here would be doubled — unless the task declares `path`,
+ * which is the sanctioned escape hatch for a host that does not mirror the
+ * vendor's layout. Shared by the file and `--base-url`, so a flag cannot skip a
+ * check the file would fail.
  */
-export function originIssue(value: string): OriginIssue | undefined {
-  const prefix = leftoverApiPrefix(value);
-  if (prefix === undefined) return undefined;
-  return { prefix, origin: stripApiPrefix(value) ?? value };
-}
-
-export function leftoverApiPrefix(baseUrl: string): string | undefined {
+export function vendorPathIssue(value: string): OriginIssue | undefined {
   let url: URL;
   try {
-    url = new URL(baseUrl);
+    url = new URL(value);
   } catch {
     return undefined;
   }
   if (!isVendorHost(url.hostname)) return undefined;
-  return API_PREFIXES.find((prefix) => url.pathname === prefix || url.pathname.endsWith(prefix));
+  if (url.pathname === "" || url.pathname === "/") return undefined;
+  return { prefix: url.pathname, origin: `${url.protocol}//${url.host}` };
+}
+
+/**
+ * What a `path` override should say when base_url already carries a prefix: the
+ * adapter's path minus the vendor's own `<api>/<version>` root (two segments in
+ * both dialects, `/api/v3` and `/compatible-mode/v1`). Only ever used to suggest a
+ * value in an error message; the request itself still uses `createPath`.
+ */
+function pathAfterVendorRoot(createPath: string | undefined): string | undefined {
+  if (createPath === undefined) return undefined;
+  const segments = createPath.split("/");
+  if (segments.length < 5) return undefined;
+  return `/${segments.slice(3).join("/")}`;
 }
 
 function isVendorHost(hostname: string): boolean {
@@ -221,6 +220,12 @@ export interface TaskBlock {
   default?: string;
   models?: string[];
   timeout_seconds?: number;
+  /**
+   * Overrides the adapter's endpoint path for this provider. Only for hosts that
+   * do not mirror the vendor's layout (a gateway with its own prefix); the
+   * adapter's `createPath` stays the default and the single source of truth.
+   */
+  path?: string;
 }
 
 /** One `[providers.<name>]` table, before any value is validated. */
@@ -253,11 +258,8 @@ export const DEFAULT_TIMEOUT_SECONDS: Record<Task, number> = { image: 300, video
 /** Upper bound on `timeout_seconds`: a day, so a typo cannot hang a run for weeks. */
 export const MAX_TIMEOUT_SECONDS = 86_400;
 
-/** Path prefixes the adapters own; a base_url ending with one of these would double it. */
-const API_PREFIXES = ["/api/v3", "/api/v1", "/compatible-mode/v1"] as const;
-
 const PROVIDER_ENTRY_FIELDS = ["api_type", "base_url", "api_key_env"] as const;
-const TASK_BLOCK_FIELDS = ["default", "models", "timeout_seconds"] as const;
+const TASK_BLOCK_FIELDS = ["default", "models", "timeout_seconds", "path"] as const;
 
 /**
  * Reads config.toml. The file is the only source of truth; nothing is built in. Structure is validated for
@@ -399,6 +401,16 @@ function readTaskBlock(
       continue;
     }
 
+    if (key === "path") {
+      if (typeof value !== "string" || !value.startsWith("/") || /[?#]/.test(value)) {
+        throw new ConfigError(
+          `path under ${where} must start with "/" and carry no query or fragment (${file})`,
+        );
+      }
+      block.path = value;
+      continue;
+    }
+
     if (key === "timeout_seconds") {
       if (typeof value !== "number") {
         throw new ConfigError(`timeout_seconds under ${where} must be a number (${file})`);
@@ -458,13 +470,9 @@ function preTaskShapeMessage(name: string, file: string, table: TomlTable, model
  * check and then 404, so copying it verbatim would produce a broken config.
  */
 function migrationOrigin(baseUrl: string): string {
-  try {
-    const url = new URL(baseUrl);
-    if (isVendorHost(url.hostname)) return `${url.protocol}//${url.host}`;
-  } catch {
-    // Not a URL at all: keep whatever the user wrote so they can see it.
-  }
-  return stripApiPrefix(baseUrl) ?? baseUrl;
+  const issue = vendorPathIssue(baseUrl);
+  if (issue !== undefined) return issue.origin;
+  return baseUrl;
 }
 
 /**
@@ -538,6 +546,24 @@ export function resolveSelection(request: SelectionRequest, config: TaskConfig):
 
   const provider = validateProviderShape(name, config);
 
+  // A sub-path on the vendor's own host doubles once the adapter appends its own
+  // path. An explicit `path` on the task is the sanctioned way to say "my host
+  // really does live under this prefix".
+  if (block.path === undefined) {
+    const issue = vendorPathIssue(provider.base_url);
+    if (issue !== undefined) {
+      const defaultPath = adapterPath(provider.api_type, request.task);
+      throw new ConfigError(
+        `provider "${name}" has base_url ${JSON.stringify(provider.base_url)} in ${configPath()}: ` +
+          `it points at the sub-path "${issue.prefix}", and the ${provider.api_type} dialect ` +
+          `appends its own path to base_url. Set base_url to the origin (e.g. "${issue.origin}"), ` +
+          `or keep the prefix and declare path = ` +
+          `${JSON.stringify(pathAfterVendorRoot(defaultPath) ?? "/<path from the prefix>")} ` +
+          `under ${where}`,
+      );
+    }
+  }
+
   const models = block.models;
   if (models === undefined) {
     throw new ConfigError(`${where} is missing required field(s): models`);
@@ -586,7 +612,14 @@ export function resolveSelection(request: SelectionRequest, config: TaskConfig):
     );
   }
 
-  return { provider, task: request.task, model, timeout_ms: seconds * 1000 };
+  const binding: TaskBinding = {
+    provider,
+    task: request.task,
+    model,
+    timeout_ms: seconds * 1000,
+  };
+  if (block.path !== undefined) binding.path = block.path;
+  return binding;
 }
 
 /**
@@ -653,10 +686,3 @@ function isTask(value: string): value is Task {
   return KNOWN_TASKS.includes(value as Task);
 }
 
-/** The origin of a known API prefix, or undefined when the path has none. */
-function stripApiPrefix(value: string): string | undefined {
-  for (const prefix of API_PREFIXES) {
-    if (value.endsWith(prefix)) return value.slice(0, -prefix.length);
-  }
-  return undefined;
-}
