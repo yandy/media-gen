@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { parse, type TomlTable } from "smol-toml";
 import { ConfigError, malformedDocumentMessage, unreadableFileMessage, unwritableFileMessage } from "./errors.js";
-import { DIALECT_DEFAULT_PATHS, SEED_CONFIG } from "./providers.js";
+import { SEED_CONFIG } from "./providers.js";
 import { shellArg, tomlKey } from "./toml.js";
 import type { Dialect, ProviderConfig } from "./types.js";
 
@@ -13,7 +13,6 @@ export interface ProviderOverride {
   api_type?: Dialect;
   base_url?: string;
   model?: string;
-  path?: string;
   api_key_env?: string;
 }
 
@@ -24,7 +23,7 @@ export interface MediagenConfig {
   providers: Record<string, ProviderOverride>;
 }
 
-const PROVIDER_STRING_FIELDS = ["base_url", "model", "path", "api_key_env"] as const;
+const PROVIDER_STRING_FIELDS = ["base_url", "model", "api_key_env"] as const;
 
 export function configDir(): string {
   const override = process.env.MEDIAGEN_CLI_CONFIG_DIR;
@@ -199,7 +198,6 @@ export function resolveProvider(name: string, config: MediagenConfig): ProviderC
     api_type: apiType,
     base_url: baseUrl,
     model,
-    path: entry.path ?? DIALECT_DEFAULT_PATHS[apiType],
   };
   if (entry.api_key_env !== undefined) provider.api_key_env = entry.api_key_env;
   return provider;

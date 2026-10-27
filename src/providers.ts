@@ -1,10 +1,3 @@
-import type { Dialect } from "./types.js";
-
-export const DIALECT_DEFAULT_PATHS: Record<Dialect, string> = {
-  qwen: "/compatible-mode/v1/images/generations",
-  ark: "/api/v3/images/generations",
-};
-
 /**
  * Written verbatim to config.toml the first time the CLI needs a configuration.
  *
@@ -26,14 +19,13 @@ default_provider = "dashscope"
 api_type = "qwen"
 # The public host does not serve the images API. Replace base_url with your
 # workspace host, e.g. https://<workspace-id>.cn-beijing.maas.aliyuncs.com
-base_url = "https://dashscope.aliyuncs.com"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 model = "qwen-image-3.0"
 api_key_env = "DASHSCOPE_API_KEY"   # which environment variable holds this entry's key
-# path = "/compatible-mode/v1/images/generations"   # optional; the dialect default
 
 [providers.volcengine]
 api_type = "ark"
-base_url = "https://ark.cn-beijing.volces.com"
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
 model = "doubao-seedream-5-0-flash-260915"
 api_key_env = "ARK_API_KEY"
 

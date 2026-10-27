@@ -379,9 +379,8 @@ describe("mediagen config show", () => {
     expect(result.stdout).toContain(configPath());
     expect(result.stdout).toMatch(/default_provider:\s+dashscope \(config\.toml\)/);
     expect(result.stdout).toMatch(/output_dir:\s+\S+ \(default/);
-    expect(result.stdout).toContain("https://dashscope.aliyuncs.com (config.toml)");
-    expect(result.stdout).toContain("https://ark.cn-beijing.volces.com (config.toml)");
-    expect(result.stdout).toContain("/compatible-mode/v1/images/generations (default)");
+    expect(result.stdout).toContain("https://dashscope.aliyuncs.com/compatible-mode/v1 (config.toml)");
+    expect(result.stdout).toContain("https://ark.cn-beijing.volces.com/api/v3 (config.toml)");
     expect(result.stdout).toMatch(/not set/);
   });
 
@@ -404,12 +403,12 @@ output_dir = "./shots"
 
 [providers.volcengine]
 api_type = "ark"
-base_url = "https://ark.cn-beijing.volces.com"
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
 model = "doubao-seedream-5-0-pro-260628"
 
 [providers.my-proxy]
 api_type = "ark"
-base_url = "https://proxy.example.com"
+base_url = "https://proxy.example.com/api/v3"
 model = "some-model"
 api_key_env = "MY_PROXY_KEY"
 `);
@@ -421,13 +420,13 @@ api_key_env = "MY_PROXY_KEY"
     expect(result.stdout).toMatch(/output_dir:\s+\.\/shots \(config\.toml\)/);
     expect(result.stdout).toContain("doubao-seedream-5-0-pro-260628 (config.toml)");
     expect(result.stdout).toContain("my-proxy");
-    expect(result.stdout).toContain("https://proxy.example.com (config.toml)");
+    expect(result.stdout).toContain("https://proxy.example.com/api/v3 (config.toml)");
   });
 
   it("emits the resolved config as JSON with masked keys", async () => {
     process.env.ARK_API_KEY = API_KEY;
     writeConfig(
-      '[providers.dashscope]\napi_type = "qwen"\nbase_url = "https://x"\nmodel = "my-qwen"\napi_key_env = "DASHSCOPE_API_KEY"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com"\nmodel = "m"\napi_key_env = "ARK_API_KEY"\n',
+      '[providers.dashscope]\napi_type = "qwen"\nbase_url = "https://x"\nmodel = "my-qwen"\napi_key_env = "DASHSCOPE_API_KEY"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com/api/v3"\nmodel = "m"\napi_key_env = "ARK_API_KEY"\n',
     );
 
     const result = await run(["config", "show", "--json"]);
@@ -452,14 +451,13 @@ api_key_env = "MY_PROXY_KEY"
   });
 
   it("reports an incomplete provider instead of failing", async () => {
-    writeConfig('[providers.half-baked]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\n');
+    writeConfig('[providers.half-baked]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\n');
 
     const result = await run(["config", "show"]);
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("half-baked");
     expect(result.stdout).toMatch(/missing:\s+model/);
-    expect(result.stdout).toContain("/api/v3/images/generations (default)");
   });
 });
 
@@ -577,14 +575,14 @@ describe("mediagen config add: value hygiene", () => {
     expect(readConfig()).toContain('base_url = "https://k.example.com"');
   });
 
-  it.each(["--path", "--api-key-env"])("rejects a blank %s", async (flag) => {
+  it("rejects a blank --api-key-env", async () => {
     const result = await add([
       "p1", "--api-type", "qwen", "--base-url", "https://k.example.com", "--model", "m",
-      flag, "   ",
+      "--api-key-env", "   ",
     ]);
 
     expect(result.code).toBe(2);
-    expect(result.stderr).toContain(flag);
+    expect(result.stderr).toContain("--api-key-env");
     // The bootstrap creates the seed config before dispatch; a rejected command
     // must still not add a provider table to it.
     expect(fs.existsSync(configPath())).toBe(true);
@@ -818,7 +816,7 @@ describe("mediagen auth status", () => {
 
   it("lists every provider declared in config.toml", async () => {
     writeConfig(
-      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\nmodel = "m"\napi_key_env = "MY_PROXY_KEY"\n',
+      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "m"\napi_key_env = "MY_PROXY_KEY"\n',
     );
     process.env.MY_PROXY_KEY = API_KEY;
 
@@ -845,7 +843,7 @@ describe("mediagen login", () => {
 
   it("defaults the provider to config.default_provider", async () => {
     writeConfig(
-      'default_provider = "volcengine"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com"\nmodel = "m"\n',
+      'default_provider = "volcengine"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com/api/v3"\nmodel = "m"\n',
     );
 
     const result = await run(["login", "--api-key", API_KEY]);
@@ -925,7 +923,7 @@ describe("mediagen login", () => {
 
   it("accepts a provider defined in config.toml", async () => {
     writeConfig(
-      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\nmodel = "m"\n',
+      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "m"\n',
     );
 
     const result = await run(["login", "--provider", "my-proxy", "--api-key", API_KEY]);
@@ -967,7 +965,7 @@ describe("mediagen logout", () => {
 
   it("defaults the provider to config.default_provider", async () => {
     writeConfig(
-      'default_provider = "volcengine"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com"\nmodel = "m"\n',
+      'default_provider = "volcengine"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com/api/v3"\nmodel = "m"\n',
     );
     await run(["login", "--provider", "volcengine", "--api-key", API_KEY]);
 
@@ -1076,7 +1074,7 @@ describe("mediagen image generate", () => {
       "image", "generate", "x",
       "--provider", "dashscope",
       "--api-key", API_KEY,
-      "--base-url", "https://proxy.example.com/",
+      "--base-url", "https://proxy.example.com/compatible-mode/v1/",
       "--out-dir", outDir,
     ]);
 

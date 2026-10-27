@@ -220,7 +220,7 @@ export async function callImageApi(params: CallImageApiParams): Promise<ParsedRe
   const payload = JSON.stringify(body);
   const redact = redactorFor(apiKey);
 
-  const url = `${provider.base_url}${provider.path}`;
+  const url = `${provider.base_url}${dialect.path}`;
   const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
   let response: Response;

@@ -5,7 +5,6 @@ export interface ProviderConfig {
   api_type: Dialect;
   base_url: string;
   model: string;
-  path: string;
   api_key_env?: string;
 }
 
@@ -47,6 +46,8 @@ export interface ParsedResponse {
 }
 
 export interface DialectAdapter {
+  /** Endpoint file name, appended to the provider's base_url. */
+  path: string;
   buildRequest(req: ImageRequest): unknown;
   parseResponse(json: unknown, requestId?: string): ParsedResponse;
 }

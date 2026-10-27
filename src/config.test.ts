@@ -191,7 +191,7 @@ describe("prepareConfigFile", () => {
     expect(Object.keys(config.providers).sort()).toEqual(["dashscope", "volcengine"]);
     expect(config.providers.dashscope).toEqual({
       api_type: "qwen",
-      base_url: "https://dashscope.aliyuncs.com",
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
       model: "qwen-image-3.0",
       api_key_env: "DASHSCOPE_API_KEY",
     });
@@ -267,17 +267,16 @@ describe("ensureConfigFile", () => {
 });
 
 describe("resolveProvider", () => {
-  it("resolves a provider declared in config.toml and fills the dialect path", () => {
+  it("resolves a provider declared in config.toml without inventing a path", () => {
     writeConfig(
-      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\nmodel = "some-model"\n',
+      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "some-model"\n',
     );
 
     expect(resolveProvider("my-proxy", loadConfig())).toEqual({
       name: "my-proxy",
       api_type: "ark",
-      base_url: "https://proxy.example.com",
+      base_url: "https://proxy.example.com/api/v3",
       model: "some-model",
-      path: "/api/v3/images/generations",
     });
   });
 
@@ -300,12 +299,12 @@ describe("resolveProvider", () => {
     expect(error.message).toContain("default_provider");
   });
 
-  it("lets config override the path of a provider", () => {
+  it("ignores a leftover path key, which no longer means anything", () => {
     writeConfig(
-      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\nmodel = "some-model"\npath = "/custom/images"\n',
+      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "m"\npath = "/custom/images"\n',
     );
 
-    expect(resolveProvider("my-proxy", loadConfig()).path).toBe("/custom/images");
+    expect(resolveProvider("my-proxy", loadConfig())).not.toHaveProperty("path");
   });
 
   it("throws ConfigError naming api_type when a provider omits it", () => {

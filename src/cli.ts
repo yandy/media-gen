@@ -28,7 +28,6 @@ import {
 import { ConfigError, UsageError } from "./errors.js";
 import { runGenerate, type GenerateOptions } from "./generate.js";
 import { renderError, renderHuman, renderJson, type RenderedOutput } from "./output.js";
-import { DIALECT_DEFAULT_PATHS } from "./providers.js";
 import { shellArg, tomlBasicString, tomlKey } from "./toml.js";
 
 /**
@@ -67,7 +66,6 @@ interface ProviderView {
   api_type?: ConfiguredValue;
   base_url?: ConfiguredValue;
   model?: ConfiguredValue;
-  path?: ConfiguredValue;
   api_key_env?: ConfiguredValue;
   api_key: KeyStatus;
   missing?: string[];
@@ -83,7 +81,6 @@ interface ConfigAddFlags {
   apiType?: string;
   baseUrl?: string;
   model?: string;
-  path?: string;
   apiKeyEnv?: string;
   json?: boolean;
 }
@@ -335,7 +332,6 @@ export function createProgram(options: ProgramOptions = {}): Command {
     .option("--api-type <dialect>", "protocol dialect: qwen or ark")
     .option("--base-url <url>", "the provider's API base URL")
     .option("--model <id>", "the model id this provider defaults to")
-    .option("--path <path>", "override the dialect's default images path")
     .option("--api-key-env <VAR>", "environment variable holding this provider's key")
     .option("--json", "print a JSON result")
     .action(async (name: string, flags: ConfigAddFlags) => {
@@ -733,13 +729,8 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
 
   const model = (flags.model ?? "").trim();
   if (model === "") throw new UsageError("--model is required");
-  // A blank optional field would be written out as an empty string, and an empty
-  // `path` in particular survives `path ?? default` and sends the request to the
-  // bare host, so the field is either sane or absent.
-  const pathOverride = flags.path?.trim();
-  if (flags.path !== undefined && pathOverride === "") {
-    throw new UsageError("--path must not be empty");
-  }
+  // A blank optional field would be written out as an empty string, so it is
+  // either sane or absent.
   const apiKeyEnv = flags.apiKeyEnv?.trim();
   if (flags.apiKeyEnv !== undefined && apiKeyEnv === "") {
     throw new UsageError("--api-key-env must not be empty");
@@ -762,7 +753,6 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
     base_url: normalizeBaseUrl(flags.baseUrl),
     model,
   };
-  if (pathOverride !== undefined) fields.path = pathOverride;
   if (apiKeyEnv !== undefined) fields.api_key_env = apiKeyEnv;
 
   const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
@@ -839,7 +829,7 @@ function runConfigShow(flags: { json?: boolean }): void {
 
   for (const { name, apiKeyEnv, view } of views) {
     lines.push(`  ${view.name} (dialect ${view.api_type?.value ?? "unknown"})`);
-    for (const field of ["api_type", "base_url", "model", "path", "api_key_env"] as const) {
+    for (const field of ["api_type", "base_url", "model", "api_key_env"] as const) {
       const value = view[field];
       if (value !== undefined) lines.push(`    ${field}: ${show(value)}`);
     }
@@ -867,7 +857,7 @@ function configuredValue(value: string, declared: unknown): ConfiguredValue {
 
 function buildProviderView(name: string, entry: ProviderOverride): ProviderView {
   const field = (
-    key: "api_type" | "base_url" | "model" | "path" | "api_key_env",
+    key: "api_type" | "base_url" | "model" | "api_key_env",
   ): ConfiguredValue | undefined => {
     const value = entry[key];
     return value === undefined ? undefined : { value, source: "config.toml" };
@@ -875,25 +865,18 @@ function buildProviderView(name: string, entry: ProviderOverride): ProviderView 
 
   const missing: string[] = [];
   const fields: Partial<
-    Record<"api_type" | "base_url" | "model" | "path" | "api_key_env", ConfiguredValue>
+    Record<"api_type" | "base_url" | "model" | "api_key_env", ConfiguredValue>
   > = {};
 
-  for (const key of ["api_type", "base_url", "model", "path", "api_key_env"] as const) {
+  for (const key of ["api_type", "base_url", "model", "api_key_env"] as const) {
     const value = field(key);
     if (value === undefined) {
-      // api_key_env and path are optional everywhere; the rest are required, and
-      // missing them is exactly what resolveProvider() will complain about.
-      if (key !== "api_key_env" && key !== "path") missing.push(key);
+      // api_key_env is optional everywhere; the rest are required, and missing
+      // them is exactly what resolveProvider() will complain about.
+      if (key !== "api_key_env") missing.push(key);
       continue;
     }
     fields[key] = value;
-  }
-
-  // resolveProvider() fills a missing path with the dialect default, so
-  // config show reports the path a request will actually use.
-  const apiType = fields.api_type?.value;
-  if (fields.path === undefined && (apiType === "qwen" || apiType === "ark")) {
-    fields.path = { value: DIALECT_DEFAULT_PATHS[apiType], source: "default" };
   }
 
   const view: ProviderView = {
