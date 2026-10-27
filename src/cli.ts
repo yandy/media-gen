@@ -138,41 +138,42 @@ function imageHelpText(command: "generate" | "edit"): string {
   const examples =
     command === "edit"
       ? `  # edit a local file (local paths are read and sent as base64 data URLs)
-  mediagen image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider qwen
+  mediagen image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider dashscope
 
   # combine several references
-  mediagen image edit "put the character from the first image into the scene from the second" --image ./character.png --image ./scene.jpg --provider qwen
+  mediagen image edit "put the character from the first image into the scene from the second" --image ./character.png --image ./scene.jpg --provider dashscope
 
   # ark layer decomposition: one paid request, several files back (base + layers)
-  mediagen image edit "separate the sticker from its background" --image ./sticker.png --provider ark --layer-decomposition true --json
+  mediagen image edit "separate the sticker from its background" --image ./sticker.png --provider volcengine --layer-decomposition true --json
 
   # a third-party proxy declared as [providers.my-proxy] in config.toml
   mediagen image edit "remove the timestamp" --image ./shot.png --provider my-proxy --out-dir ./out`
       : `  # text to image
-  mediagen image generate "a red fox in fresh snow, soft morning light" --provider qwen --size 1024x1024 --out-dir ./out
+  mediagen image generate "a red fox in fresh snow, soft morning light" --provider dashscope --size 1024x1024 --out-dir ./out
 
   # image to image; "mediagen image edit" is the same command with --image required
-  mediagen image generate "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider qwen
+  mediagen image generate "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider dashscope
 
   # several references at once
-  mediagen image generate "the character from the first image wearing the jacket from the second" --image ./character.png --image ./jacket.png --provider qwen
+  mediagen image generate "the character from the first image wearing the jacket from the second" --image ./character.png --image ./jacket.png --provider dashscope
 
   # four ark variants as JSON, for an agent to parse
-  mediagen image generate "minimalist logo for a coffee roastery" --provider ark --model doubao-seedream-5-0-pro --n 4 --seed 42 --json
+  mediagen image generate "minimalist logo for a coffee roastery" --provider volcengine --model doubao-seedream-5-0-pro --n 4 --seed 42 --json
 
   # a third-party proxy declared as [providers.my-proxy] in config.toml
   mediagen image generate "product photo on a white background" --provider my-proxy --out-dir ./shots
 
   # a one-off test against a proxy, without touching config.toml
-  mediagen image generate "colour test card" --provider qwen --base-url https://proxy.example.com --api-key sk-...`;
+  mediagen image generate "colour test card" --provider dashscope --base-url https://proxy.example.com --api-key sk-...`;
 
   return `
 ${intro}
 
-Models (--provider picks the vendor dialect, --model the exact id):
-  qwen-image-3.0              qwen  best text rendering (CJK + Latin) and image editing
-  doubao-seedream-5-0-flash   ark   fastest; use it for drafts and iteration
-  doubao-seedream-5-0-pro     ark   highest quality; slower and more expensive
+Models (--provider picks the endpoint declared in config.toml, --model the exact id):
+  qwen-image-3.0              dashscope   best text rendering (CJK + Latin) and image editing
+  doubao-seedream-5-0-flash   volcengine  fastest; use it for drafts and iteration
+  doubao-seedream-5-0-pro     volcengine  highest quality; slower and more expensive
+  The provider names above are the two the first run writes into config.toml.
   Snapshot ids roll forward, so override any of them with --model or in config.toml.
 
 Sizes (--size, passed through to the vendor; omit it for the vendor default):
@@ -204,7 +205,7 @@ ${examples}`;
 }
 
 const IMAGE_OPTION_HELP = {
-  provider: "provider name: qwen, ark, or a [providers.<name>] from config.toml",
+  provider: "provider name declared in config.toml (default: config default_provider)",
   model: "model id (default: the provider's configured model)",
   image: "reference image, repeatable; local files are sent as data URLs",
   size: "1K|1.5K|2K|3K|4K, WxH pixels, or auto (qwen only)",
