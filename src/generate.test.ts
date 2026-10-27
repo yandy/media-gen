@@ -32,9 +32,11 @@ beforeEach(() => {
   configHome = path.join(tempDir, "config");
   outDir = path.join(tempDir, "out");
   process.env.MEDIAGEN_CLI_CONFIG_DIR = configHome;
-  // These tests drive runGenerate() directly, bypassing main()'s bootstrap, so
-  // the seed config has to be written here — exactly what a real run gets.
-  prepareConfigFile();
+  // These tests drive runGenerate() directly, bypassing main()'s bootstrap, so a
+  // config has to exist here. It is the documented shape with real base URLs: the
+  // seed's qwen entry is a placeholder the user must edit, which config.test.ts
+  // and cli.test.ts cover.
+  writeConfigFor("");
 });
 
 afterEach(() => {

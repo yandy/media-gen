@@ -187,14 +187,27 @@ describe("prepareConfigFile", () => {
 
     expect(fs.existsSync(configPath())).toBe(true);
     const config = loadConfig();
-    expect(config.default_provider).toBe("dashscope");
+    expect(config.default_provider).toBe("volcengine");
     expect(Object.keys(config.providers).sort()).toEqual(["dashscope", "volcengine"]);
-    expect(config.providers.dashscope).toEqual({
-      api_type: "qwen",
-      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      model: "qwen-image-3.0",
-      api_key_env: "DASHSCOPE_API_KEY",
+    expect(config.providers.volcengine).toEqual({
+      api_type: "ark",
+      base_url: "https://ark.cn-beijing.volces.com/api/v3",
+      model: "doubao-seedream-5-0-flash-260915",
+      api_key_env: "ARK_API_KEY",
     });
+  });
+
+  it("seeds a layout where only qwen needs an edit", () => {
+    ensureConfigFile();
+    const text = fs.readFileSync(configPath(), "utf8");
+
+    expect(text).toContain('default_provider = "volcengine"');
+    expect(text).toContain('base_url = "https://ark.cn-beijing.volces.com/api/v3"');
+    expect(text).toContain(
+      'base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"',
+    );
+    expect(text).not.toMatch(/^path\s*=/m);
+    expect(text).not.toMatch(/^output_dir\s*=/m);
   });
 
   it("validates an existing file and leaves its bytes alone", () => {

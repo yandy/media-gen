@@ -14,6 +14,26 @@ const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0
 const QWEN_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/images/generations";
 const ARK_URL = "https://ark.cn-beijing.volces.com/api/v3/images/generations";
 
+/**
+ * The documented provider shape with usable base URLs. Tests that exercise the
+ * seed delete this file first: the bootstrap only ever writes a config that is
+ * absent, and the seeded qwen entry is a placeholder a user must edit.
+ */
+const FIXTURE_CONFIG = `default_provider = "dashscope"
+
+[providers.dashscope]
+api_type = "qwen"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+model = "qwen-image-3.0"
+api_key_env = "DASHSCOPE_API_KEY"
+
+[providers.volcengine]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
+model = "doubao-seedream-5-0-flash-260915"
+api_key_env = "ARK_API_KEY"
+`;
+
 const TRACKED_ENV = [
   "MEDIAGEN_CLI_CONFIG_DIR",
   "XDG_CONFIG_HOME",
@@ -44,6 +64,7 @@ beforeEach(() => {
   configHome = path.join(tempDir, "config");
   outDir = path.join(tempDir, "out");
   fs.mkdirSync(configHome, { recursive: true });
+  fs.writeFileSync(path.join(configHome, "config.toml"), FIXTURE_CONFIG);
 
   process.env.MEDIAGEN_CLI_CONFIG_DIR = configHome;
   delete process.env.XDG_CONFIG_HOME;
@@ -267,6 +288,7 @@ describe("image help text", () => {
 
 describe("config bootstrap", () => {
   it("creates config.toml before a command that does not read it runs", async () => {
+    fs.rmSync(configPath(), { force: true });
     expect(fs.existsSync(configPath())).toBe(false);
 
     const result = await run(["config", "path"]);
@@ -373,14 +395,19 @@ describe("mediagen config show", () => {
   });
 
   it("prints the seeded configuration with a source note for each value", async () => {
+    fs.rmSync(configPath(), { force: true });
+
     const result = await run(["config", "show"]);
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain(configPath());
-    expect(result.stdout).toMatch(/default_provider:\s+dashscope \(config\.toml\)/);
+    expect(result.stdout).toMatch(/default_provider:\s+volcengine \(config\.toml\)/);
     expect(result.stdout).toMatch(/output_dir:\s+\S+ \(default/);
-    expect(result.stdout).toContain("https://dashscope.aliyuncs.com/compatible-mode/v1 (config.toml)");
+    expect(result.stdout).toContain(
+      "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1 (config.toml)",
+    );
     expect(result.stdout).toContain("https://ark.cn-beijing.volces.com/api/v3 (config.toml)");
+    expect(result.stdout).toContain(`${ARK_URL} (computed)`);
     expect(result.stdout).toMatch(/not set/);
   });
 
@@ -1017,6 +1044,18 @@ describe("mediagen logout", () => {
 });
 
 describe("mediagen image generate", () => {
+  it("refuses to send a request while the qwen placeholder is unedited", async () => {
+    fs.rmSync(configPath(), { force: true });
+    process.env.DASHSCOPE_API_KEY = API_KEY;
+    const { calls } = stubFetch(() => apiResponse([{ url: "https://cdn.example.com/a.png" }]));
+
+    const result = await run(["image", "generate", "a red fox", "--provider", "dashscope"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("workspace-id");
+    expect(calls).toHaveLength(0);
+  });
+
   it("passes every qwen flag through to the request body", async () => {
     const { calls, downloads } = stubFetch(() =>
       apiResponse([{ url: "https://cdn.example.com/a.png" }, { url: "https://cdn.example.com/b.png" }]),
