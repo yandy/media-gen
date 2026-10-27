@@ -23,11 +23,13 @@ function provider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
 }
 
 function bindingFor(overrides: Partial<ProviderConfig> = {}, task: Task = "image"): TaskBinding {
+  const providerConfig = provider(overrides);
   return {
-    provider: provider(overrides),
+    provider: providerConfig,
     task,
     model: "qwen-image-3.0",
     timeout_ms: REQUEST_TIMEOUT_MS,
+    dialect: providerConfig.api_type ?? "openai",
   };
 }
 
@@ -38,6 +40,7 @@ function bindingOf(providerConfig: ProviderConfig, task: Task = "image"): TaskBi
     task,
     model: "qwen-image-3.0",
     timeout_ms: REQUEST_TIMEOUT_MS,
+    dialect: providerConfig.api_type ?? "openai",
   };
 }
 
@@ -136,6 +139,7 @@ describe("callApi: a task's path override", () => {
         model: "m",
         timeout_ms: REQUEST_TIMEOUT_MS,
         path: "/images/generations",
+        dialect: "ark",
       },
       apiKey: API_KEY,
       request: imageRequest(),

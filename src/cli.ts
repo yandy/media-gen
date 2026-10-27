@@ -71,6 +71,8 @@ interface KeyStatus {
 
 interface TaskView {
   task: string;
+  /** The protocol this task resolved to, with the provider default as fallback. */
+  api_type?: ConfiguredValue;
   default?: ConfiguredValue;
   models?: string[];
   timeout_seconds?: number;
@@ -880,9 +882,10 @@ function runConfigShow(flags: { json?: boolean }): void {
 
   for (const { name, apiKeyEnv, view } of views) {
     lines.push(
-      `  ${view.name} (dialect ${view.api_type?.value ?? "unknown"})${
-        view.api_type?.note === undefined ? "" : `, ${view.api_type.note}`
-      })`,
+      `  ${view.name} (dialect ${
+        view.api_type?.value ??
+        (view.tasks?.some((task) => task.api_type !== undefined) === true ? "per task" : "unknown")
+      })${view.api_type?.note === undefined ? "" : `, ${view.api_type.note}`}`,
     );
     for (const field of ["api_type", "base_url", "api_key_env"] as const) {
       const value = view[field];
@@ -899,6 +902,9 @@ function runConfigShow(flags: { json?: boolean }): void {
 
     for (const taskView of view.tasks ?? []) {
       lines.push(`    ${taskView.task}:`);
+      if (taskView.api_type !== undefined) {
+        lines.push(`      api_type: ${show(taskView.api_type)}${noteSuffix(taskView.api_type)}`);
+      }
       if (taskView.default !== undefined) lines.push(`      default: ${show(taskView.default)}`);
       if (taskView.models !== undefined) {
         lines.push(`      models: ${taskView.models.join(", ")}`);
@@ -933,6 +939,11 @@ function show(value: ConfiguredValue): string {
   return `${value.value} (${value.source})`;
 }
 
+/** The trailing half of a configured value's note, or nothing. */
+function noteSuffix(value: ConfiguredValue): string {
+  return value.note === undefined ? "" : `; ${value.note}`;
+}
+
 /** A top-level value came from config.toml when the file declares the key. */
 function configuredValue(value: string, declared: unknown): ConfiguredValue {
   return declared === undefined ? { value, source: "default" } : { value, source: "config.toml" };
@@ -947,9 +958,10 @@ function buildProviderView(name: string, entry: ProviderEntry): ProviderView {
   for (const key of ["api_type", "base_url", "api_key_env"] as const) {
     const value = entry[key];
     if (value === undefined) {
-      // api_key_env is optional everywhere; the rest are required, and missing
-      // them is exactly what resolveSelection() will complain about.
-      if (key !== "api_key_env") missing.push(key);
+      // api_key_env is optional everywhere, and api_type may live on the task
+      // tables instead; the rest are required, and missing them is exactly what
+      // resolveSelection() will complain about.
+      if (key === "base_url") missing.push(key);
       continue;
     }
     fields[key] = { value, source: "config.toml" };
@@ -977,6 +989,26 @@ function buildProviderView(name: string, entry: ProviderEntry): ProviderView {
     (task) => {
       const block = entry.tasks[task] ?? {};
       const taskView: TaskView = { task };
+      // The task's own protocol wins; the provider-level value is the default it
+      // falls back to, and it is shown here so `config show` answers "what will
+      // this task actually speak" without the reader resolving it themselves.
+      const ownDialect = block.api_type;
+      const effectiveDialect = ownDialect ?? entry.api_type;
+      if (ownDialect !== undefined) {
+        taskView.api_type = {
+          value: ownDialect,
+          source: "config.toml",
+          ...(block.api_type_alias === true
+            ? { note: 'declared as the deprecated alias "qwen"' }
+            : {}),
+        };
+      } else if (effectiveDialect !== undefined) {
+        taskView.api_type = {
+          value: effectiveDialect,
+          source: "default",
+          note: "provider default",
+        };
+      }
       if (block.default !== undefined) {
         taskView.default = { value: block.default, source: "config.toml" };
       }
@@ -991,8 +1023,8 @@ function buildProviderView(name: string, entry: ProviderEntry): ProviderView {
       }
       const path =
         block.path ??
-        (fields.api_type === undefined ? undefined : adapterPath(fields.api_type.value, task));
-      if (fields.api_type === undefined) {
+        (effectiveDialect === undefined ? undefined : adapterPath(effectiveDialect, task));
+      if (effectiveDialect === undefined) {
         taskView.endpoint_note = "api_type is not set";
       } else if (path === undefined) {
         taskView.endpoint_note = "no adapter yet";

@@ -4,13 +4,15 @@
  */
 export type Dialect = "openai" | "dashscope" | "ark";
 
-/** A provider is the ledger — protocol, origin, credentials — never a model. */
+/** A provider is the ledger — host, credentials — never a model. */
 export interface ProviderConfig {
   name: string;
-  api_type: Dialect;
+  api_type?: Dialect;
   base_url: string;
   api_key_env?: string;
 }
+
+/** Where the ledger's default api_type applies; the task's own value wins in TaskBinding. */
 
 export interface ImageRequest {
   model: string;
@@ -57,6 +59,8 @@ export interface TaskBinding {
   timeout_ms: number;
   /** A task's own endpoint path, for hosts whose layout differs from the vendor's. */
   path?: string;
+  /** The effective protocol for this run: the task's api_type, else the provider's. */
+  dialect: Dialect;
 }
 
 /** What a provider can be asked to produce. Each task has its own endpoint and adapter. */
@@ -67,6 +71,11 @@ export type Task = "image" | "video";
  * carries the version/API prefix itself (`/api/v3/images/generations`), so
  * `base_url` stays a single per-provider origin no matter how many tasks the
  * provider serves.
+ *
+ * Async tasks (both video protocols) will need a second phase — create, poll,
+ * fetch result. When they land that becomes an optional `asyncTask` block here
+ * (buildHeaders / taskIdFrom / pollPath / parseTaskResult), rather than polling
+ * hidden inside parseResponse.
  */
 export interface TaskAdapter {
   createPath: string;

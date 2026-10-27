@@ -125,7 +125,12 @@ export function prepareConfigFile(): void {
  * before anything is spent. The qwen example is the workspace-scoped host: the
  * public host answers the images endpoint with a 404.
  */
-function resolveBaseUrl(name: string, apiType: Dialect, file: string, value: string): string {
+function resolveBaseUrl(
+  name: string,
+  apiType: Dialect | undefined,
+  file: string,
+  value: string,
+): string {
   const normalized = normalizeHttpBaseUrl(value);
   if (normalized !== undefined) return normalized;
 
@@ -243,11 +248,19 @@ function isTable(value: unknown): value is TomlTable {
 // origin.
 // ---------------------------------------------------------------------------
 
-/** One task a provider serves: its models, its default, and how long requests may run. */
+/** One task a provider serves: its models, its default, its protocol, and how long requests may run. */
 export interface TaskBlock {
   default?: string;
   models?: string[];
   timeout_seconds?: number;
+  /**
+   * The protocol this task speaks, overriding the provider-level default. Two
+   * tasks of one account can legitimately differ: a gateway may serve images
+   * natively and video through the ark task API.
+   */
+  api_type?: Dialect;
+  /** True when config.toml spelled this task's api_type with the deprecated alias "qwen". */
+  api_type_alias?: boolean;
   /**
    * Overrides the adapter's endpoint path for this provider. Only for hosts that
    * do not mirror the vendor's layout (a gateway with its own prefix); the
@@ -289,7 +302,7 @@ export const DEFAULT_TIMEOUT_SECONDS: Record<Task, number> = { image: 300, video
 export const MAX_TIMEOUT_SECONDS = 86_400;
 
 const PROVIDER_ENTRY_FIELDS = ["api_type", "base_url", "api_key_env"] as const;
-const TASK_BLOCK_FIELDS = ["default", "models", "timeout_seconds", "path"] as const;
+const TASK_BLOCK_FIELDS = ["default", "models", "timeout_seconds", "path", "api_type"] as const;
 
 /**
  * Reads config.toml. The file is the only source of truth; nothing is built in. Structure is validated for
@@ -411,6 +424,18 @@ function readTaskBlock(
   const where = `[providers.${tomlKey(name)}.${task}]`;
 
   for (const [key, value] of Object.entries(table)) {
+    if (key === "api_type") {
+      const parsed = readDialect(value);
+      if (parsed === undefined) {
+        throw new ConfigError(
+          `api_type under ${where} is invalid: ${JSON.stringify(value)}; ${DIALECT_CHOICES}`,
+        );
+      }
+      block.api_type = parsed.dialect;
+      if (parsed.deprecated) block.api_type_alias = true;
+      continue;
+    }
+
     if (key === "default") {
       if (typeof value !== "string") {
         throw new ConfigError(`default under ${where} must be a string (${file})`);
@@ -472,27 +497,45 @@ export function validateProviderShape(name: string, config: TaskConfig): Provide
     );
   }
 
+  const declared = taskNames(entry);
   const missing: string[] = [];
-  if (entry.api_type === undefined) missing.push("api_type");
+  // A provider is usable once a protocol is declared somewhere: on the provider
+  // (the default for its tasks) or on any of its task tables. An entry with
+  // neither can never resolve, so `login` refuses it rather than storing a key
+  // for a provider that will fail on every run.
+  const hasDialect =
+    entry.api_type !== undefined ||
+    KNOWN_TASKS.some((task) => entry.tasks[task]?.api_type !== undefined);
+  if (!hasDialect) missing.push("api_type");
   if (entry.base_url === undefined) missing.push("base_url");
-  if (entry.api_type === undefined || entry.base_url === undefined) {
+  if (missing.length > 0) {
+    // When the protocol is the missing piece, name the task tables too: it is
+    // legal (and for a mixed gateway, normal) to declare it per task instead.
+    const where =
+      missing.includes("api_type") && declared.length > 0
+        ? `; api_type may live on the provider or on a task table, e.g. ${declared
+            .map((task) => `[providers.${tomlKey(name)}.${task}]`)
+            .join(" or ")}`
+        : "";
     throw new ConfigError(
       `provider "${name}" is missing required field(s): ${missing.join(", ")}; ` +
-        `fix [providers.${tomlKey(name)}] in ${file}`,
+        `fix [providers.${tomlKey(name)}] in ${file}${where}`,
     );
   }
 
-  if (taskNames(entry).length === 0) {
+  if (declared.length === 0) {
     throw new ConfigError(
       `provider "${name}" declares no task tables; expected ${KNOWN_TASKS.join(", ")}`,
     );
   }
 
+  // The required-field check above already returned when base_url was missing.
+  const baseUrl = entry.base_url as string;
   const provider: ProviderConfig = {
     name,
-    api_type: entry.api_type,
-    base_url: resolveBaseUrl(name, entry.api_type, file, entry.base_url),
+    base_url: resolveBaseUrl(name, entry.api_type, file, baseUrl),
   };
+  if (entry.api_type !== undefined) provider.api_type = entry.api_type;
   if (entry.api_key_env !== undefined) provider.api_key_env = entry.api_key_env;
   return provider;
 }
@@ -526,16 +569,26 @@ export function resolveSelection(request: SelectionRequest, config: TaskConfig):
 
   const provider = validateProviderShape(name, config);
 
+  // The protocol belongs to the task: one account can serve images natively and
+  // video through a different protocol. The provider-level value is the default.
+  const dialect = block.api_type ?? entry?.api_type;
+  if (dialect === undefined) {
+    throw new ConfigError(
+      `${where} declares no api_type and [providers.${tomlKey(name)}] sets no default; ` +
+        `add api_type = "openai" | "dashscope" | "ark" under ${where} in ${configPath()}`,
+    );
+  }
+
   // A sub-path on the vendor's own host doubles once the adapter appends its own
   // path. An explicit `path` on the task is the sanctioned way to say "my host
   // really does live under this prefix".
   if (block.path === undefined) {
     const issue = vendorPathIssue(provider.base_url);
     if (issue !== undefined) {
-      const defaultPath = adapterPath(provider.api_type, request.task);
+      const defaultPath = adapterPath(dialect, request.task);
       throw new ConfigError(
         `provider "${name}" has base_url ${JSON.stringify(provider.base_url)} in ${configPath()}: ` +
-          `it points at the sub-path "${issue.prefix}", and the ${provider.api_type} dialect ` +
+          `it points at the sub-path "${issue.prefix}", and the ${dialect} dialect ` +
           `appends its own path to base_url. Set base_url to the origin (e.g. "${issue.origin}"), ` +
           `or keep the prefix and declare path = ` +
           `${JSON.stringify(pathAfterVendorRoot(defaultPath) ?? "/<path from the prefix>")} ` +
@@ -582,7 +635,7 @@ export function resolveSelection(request: SelectionRequest, config: TaskConfig):
 
   // Resolved for its side effect: a task the dialect has no endpoint for must
   // fail here, before the timeout and long before the network.
-  getAdapter(provider.api_type, request.task);
+  getAdapter(dialect, request.task);
 
   const seconds = block.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS[request.task];
   if (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_TIMEOUT_SECONDS) {
@@ -597,6 +650,7 @@ export function resolveSelection(request: SelectionRequest, config: TaskConfig):
     task: request.task,
     model,
     timeout_ms: seconds * 1000,
+    dialect,
   };
   if (block.path !== undefined) binding.path = block.path;
   return binding;

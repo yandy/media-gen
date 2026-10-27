@@ -1071,3 +1071,17 @@ models = ["some-model"]
     });
   });
 });
+
+describe("validateSize for the dashscope dialect", () => {
+  it("rejects a size tier", () => {
+    expect(() => validateSize("2K", "dashscope")).toThrow(/accepts only a WxH pixel pair/);
+  });
+
+  it("rejects auto", () => {
+    expect(() => validateSize("auto", "dashscope")).toThrow(/accepts only a WxH pixel pair/);
+  });
+
+  it("accepts a pixel pair", () => {
+    expect(() => validateSize("2048x2048", "dashscope")).not.toThrow();
+  });
+});

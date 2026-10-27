@@ -466,6 +466,28 @@ models = ["some-model"]
     expect(result.stdout).toContain("https://proxy.example.com (config.toml)");
   });
 
+  it("shows the protocol each task resolved to, with the provider default as fallback", async () => {
+    writeConfig(
+      '[providers.gw]\napi_type = "openai"\nbase_url = "https://gw.example.com"\n\n[providers.gw.image]\napi_type = "ark"\ndefault = "m"\nmodels = ["m"]\n\n[providers.gw.video]\ndefault = "v"\nmodels = ["v"]\n',
+    );
+
+    const result = await run(["config", "show", "--json"]);
+
+    expect(result.code).toBe(0);
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+    const gw = (payload.providers as Record<string, unknown>[]).find((entry) => entry.name === "gw");
+    const tasks = gw?.tasks as Record<string, unknown>[];
+    const image = tasks.find((task) => task.task === "image");
+    const video = tasks.find((task) => task.task === "video");
+    expect(image?.api_type).toEqual({ value: "ark", source: "config.toml" });
+    expect(image?.endpoint).toBe("https://gw.example.com/api/v3/images/generations");
+    expect(video?.api_type).toEqual({
+      value: "openai",
+      source: "default",
+      note: "provider default",
+    });
+  });
+
   it("emits the resolved config as JSON with masked keys", async () => {
     process.env.ARK_API_KEY = API_KEY;
     writeConfig(

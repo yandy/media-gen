@@ -839,3 +839,47 @@ models = ["m"]
     expect(error.message).toContain('"ark"');
   });
 });
+
+describe("per-task protocol", () => {
+  it("lets a task declare its own protocol, overriding the provider default", () => {
+    writeConfig(`
+[providers.gw]
+api_type = "openai"
+base_url = "https://gw.example.com"
+
+[providers.gw.image]
+api_type = "ark"
+default = "m"
+models = ["m"]
+`);
+    const config = loadConfig();
+    expect(resolveSelection({ provider: "gw", task: "image" }, config).dialect).toBe("ark");
+  });
+
+  it("falls back to the provider-level protocol when the task declares none", () => {
+    writeConfig(`
+[providers.gw]
+base_url = "https://gw.example.com"
+
+[providers.gw.image]
+api_type = "ark"
+default = "m"
+models = ["m"]
+`);
+    const config = loadConfig();
+    expect(resolveSelection({ provider: "gw", task: "image" }, config).dialect).toBe("ark");
+  });
+
+  it("names the task table when no protocol is declared anywhere", () => {
+    writeConfig(`
+[providers.gw]
+base_url = "https://gw.example.com"
+
+[providers.gw.image]
+models = ["m"]
+`);
+    const config = loadConfig();
+    expect(thrownBy(() => resolveSelection({ provider: "gw", task: "image" }, config)).message)
+      .toContain("[providers.gw.image]");
+  });
+});
