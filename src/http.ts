@@ -155,7 +155,7 @@ function errorForStatus(
   provider: ProviderConfig,
   redact: (text: string) => string,
 ): ApiError {
-  if (status === 404 && text.trim() === "" && provider.api_type === "qwen") {
+  if (status === 404 && text.trim() === "" && provider.api_type === "openai") {
     return new ApiError(missingQwenEndpointMessage(provider, status, redact));
   }
 

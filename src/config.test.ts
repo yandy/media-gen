@@ -171,14 +171,14 @@ describe("loadConfig: the file itself", () => {
 
   it("rejects an unknown api_type at load time, naming provider and value", () => {
     writeConfig(
-      '[providers.my-proxy]\napi_type = "openai"\nbase_url = "https://proxy.example.com"\n\n[providers.my-proxy.image]\ndefault = "m"\nmodels = ["m"]\n',
+      '[providers.my-proxy]\napi_type = "gemini"\nbase_url = "https://proxy.example.com"\n\n[providers.my-proxy.image]\ndefault = "m"\nmodels = ["m"]\n',
     );
 
     const error = thrownBy(() => loadConfig());
 
     expect(error).toBeInstanceOf(ConfigError);
     expect(error.message).toContain("my-proxy");
-    expect(error.message).toContain("openai");
+    expect(error.message).toContain("gemini");
   });
 });
 
@@ -795,5 +795,47 @@ models = ["m"]
 
   it("rejects an unknown provider by name", () => {
     expect(() => validateProviderShape("ghost", taskConfig())).toThrow(/unknown provider "ghost"/);
+  });
+});
+
+describe("dialect vocabulary", () => {
+  it("accepts api_type openai", () => {
+    writeConfig(`[providers.p]
+api_type = "openai"
+base_url = "https://gw.example.com"
+
+[providers.p.image]
+models = ["m"]
+`);
+    const config = loadConfig();
+    expect(config.providers.p?.api_type).toBe("openai");
+    expect(config.providers.p?.api_type_alias).toBeUndefined();
+  });
+
+  it("normalizes the deprecated alias qwen to openai and marks it", () => {
+    writeConfig(`[providers.p]
+api_type = "qwen"
+base_url = "https://gw.example.com"
+
+[providers.p.image]
+models = ["m"]
+`);
+    const config = loadConfig();
+    expect(config.providers.p?.api_type).toBe("openai");
+    expect(config.providers.p?.api_type_alias).toBe(true);
+  });
+
+  it("names every dialect in the invalid api_type message", () => {
+    writeConfig(`[providers.p]
+api_type = "nope"
+base_url = "https://gw.example.com"
+
+[providers.p.image]
+models = ["m"]
+`);
+    const error = thrownBy(() => loadConfig());
+    expect(error.message).toContain('"openai"');
+    expect(error.message).toContain('"dashscope"');
+    expect(error.message).toContain('"ark"');
   });
 });

@@ -59,6 +59,8 @@ type ValueSource = "config.toml" | "default";
 interface ConfiguredValue {
   value: string;
   source: ValueSource;
+  /** Extra context rendered beside the value, e.g. a deprecated-alias notice. */
+  note?: string;
 }
 
 interface KeyStatus {
@@ -351,7 +353,7 @@ export function createProgram(options: ProgramOptions = {}): Command {
   config
     .command("add <name>")
     .description("Create a [providers.<name>] table in config.toml")
-    .option("--api-type <dialect>", "protocol dialect: qwen or ark")
+    .option("--api-type <dialect>", "protocol dialect: openai, dashscope or ark")
     .option("--base-url <url>", "the provider's origin, e.g. https://ark.cn-beijing.volces.com")
     .option("--task <image|video>", "which task table to create (default: image)")
     .option("--model <id>", "the model id this task defaults to")
@@ -751,9 +753,11 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
   const provider = name.trim();
   if (provider === "") throw new UsageError("a provider name is required");
 
-  const apiType = parseChoice(flags.apiType, ["qwen", "ark"], "--api-type");
+  const apiType = parseChoice(flags.apiType, ["openai", "dashscope", "ark", "qwen"], "--api-type");
   if (apiType === undefined) {
-    throw new UsageError('--api-type is required: "qwen" or "ark"');
+    throw new UsageError(
+      '--api-type is required: "openai", "dashscope" or "ark" ("qwen" still works as a deprecated alias of "openai")',
+    );
   }
   if (flags.baseUrl === undefined) throw new UsageError("--base-url is required");
   const task: Task = parseChoice(flags.task, ["image", "video"], "--task") ?? "image";
@@ -782,7 +786,7 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
   }
 
   const fields: Record<string, string> = {
-    api_type: apiType,
+    api_type: apiType === "qwen" ? "openai" : apiType,
     base_url: originBaseUrl(flags.baseUrl),
   };
   if (apiKeyEnv !== undefined) fields.api_key_env = apiKeyEnv;
@@ -810,7 +814,7 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
     apiKeyEnv === undefined
       ? `run "${loginHint}" to store its key`
       : `set ${shellArg(apiKeyEnv)}, or run "${loginHint}"`;
-  if (adapterPath(apiType, task) === undefined) {
+    if (adapterPath(apiType === "qwen" ? "openai" : apiType, task) === undefined) {
     writeErrLine(
       `note: no dialect has a "${task}" adapter yet; the table is stored and ` +
         `"config show" will mark it until video lands`,
@@ -870,12 +874,16 @@ function runConfigShow(flags: { json?: boolean }): void {
 
   if (views.length === 0) {
     lines.push(
-      "  (none; run \"mediagen config add <name> --api-type <qwen|ark> --base-url <origin> --model <id>\")",
+      "  (none; run \"mediagen config add <name> --api-type <openai|dashscope|ark> --base-url <origin> --model <id>\")",
     );
   }
 
   for (const { name, apiKeyEnv, view } of views) {
-    lines.push(`  ${view.name} (dialect ${view.api_type?.value ?? "unknown"})`);
+    lines.push(
+      `  ${view.name} (dialect ${view.api_type?.value ?? "unknown"})${
+        view.api_type?.note === undefined ? "" : `, ${view.api_type.note}`
+      })`,
+    );
     for (const field of ["api_type", "base_url", "api_key_env"] as const) {
       const value = view[field];
       if (value !== undefined) lines.push(`    ${field}: ${show(value)}`);
@@ -945,6 +953,13 @@ function buildProviderView(name: string, entry: ProviderEntry): ProviderView {
       continue;
     }
     fields[key] = { value, source: "config.toml" };
+    if (key === "api_type" && entry.api_type_alias === true) {
+      fields[key] = {
+        value,
+        source: "config.toml",
+        note: 'declared as the deprecated alias "qwen"',
+      };
+    }
   }
 
   const view: ProviderView = {

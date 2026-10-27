@@ -142,9 +142,9 @@ function resolveBaseUrl(name: string, apiType: Dialect, file: string, value: str
   }
 
   const example =
-    apiType === "qwen"
-      ? "https://abc123.cn-beijing.maas.aliyuncs.com"
-      : "https://ark.cn-beijing.volces.com";
+    apiType === "ark"
+      ? "https://ark.cn-beijing.volces.com"
+      : "https://abc123.cn-beijing.maas.aliyuncs.com";
   throw new ConfigError(
     `provider "${name}" has invalid base_url ${JSON.stringify(value)} under ${table}: ` +
       `expected an absolute http(s) origin — a gateway prefix is allowed, a version ` +
@@ -214,9 +214,20 @@ function isVendorHost(hostname: string): boolean {
   );
 }
 
-function isDialect(value: unknown): value is Dialect {
-  return value === "qwen" || value === "ark";
+/** Maps config text to a dialect. "qwen" is the deprecated alias of "openai". */
+function readDialect(
+  value: unknown,
+): { dialect: Dialect; deprecated: boolean } | undefined {
+  if (value === "openai" || value === "dashscope" || value === "ark") {
+    return { dialect: value, deprecated: false };
+  }
+  if (value === "qwen") return { dialect: "openai", deprecated: true };
+  return undefined;
 }
+
+/** The one sentence every invalid-api_type error ends with. */
+const DIALECT_CHOICES =
+  'expected "openai", "dashscope" or "ark" ("qwen" is accepted as a deprecated alias of "openai")';
 
 function isTable(value: unknown): value is TomlTable {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -248,6 +259,8 @@ export interface TaskBlock {
 /** One `[providers.<name>]` table, before any value is validated. */
 export interface ProviderEntry {
   api_type?: Dialect;
+  /** True when config.toml spelled api_type with the deprecated alias "qwen". */
+  api_type_alias?: boolean;
   base_url?: string;
   api_key_env?: string;
   tasks: Partial<Record<Task, TaskBlock>>;
@@ -337,12 +350,14 @@ function readProviderEntry(name: string, file: string, table: TomlTable): Provid
 
   for (const [key, value] of Object.entries(table)) {
     if (key === "api_type") {
-      if (!isDialect(value)) {
+      const parsed = readDialect(value);
+      if (parsed === undefined) {
         throw new ConfigError(
-          `provider "${name}" in ${file} has invalid api_type ${JSON.stringify(value)}; expected "qwen" or "ark"`,
+          `provider "${name}" in ${file} has invalid api_type ${JSON.stringify(value)}; ${DIALECT_CHOICES}`,
         );
       }
-      entry.api_type = value;
+      entry.api_type = parsed.dialect;
+      if (parsed.deprecated) entry.api_type_alias = true;
       continue;
     }
 
@@ -453,7 +468,7 @@ export function validateProviderShape(name: string, config: TaskConfig): Provide
     throw new ConfigError(
       `unknown provider "${name}": no [providers.${tomlKey(name)}] table in ${file}; ` +
         `add one by hand, or run "mediagen config add ${shellArg(name)} ` +
-        `--api-type <qwen|ark> --base-url <origin> --model <id>"`,
+        `--api-type <openai|dashscope|ark> --base-url <origin> --model <id>"`,
     );
   }
 

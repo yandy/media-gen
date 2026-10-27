@@ -33,7 +33,7 @@ default = "doubao-seedance-1-0-pro"
 models  = ["doubao-seedance-1-0-pro"]
 
 [providers.dashscope]
-api_type = "qwen"
+api_type = "openai"
 # The public host does not serve the images API. Replace the placeholder with
 # your workspace id, e.g. https://abc123.cn-beijing.maas.aliyuncs.com
 base_url    = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"
@@ -45,7 +45,7 @@ models  = ["qwen-image-3.0"]
 
 # Your own entry, e.g. a proxy of the qwen dialect:
 # [providers.my-proxy]
-# api_type    = "qwen"
+# api_type    = "openai"
 # base_url    = "https://proxy.example.com/my-gateway"   # a gateway prefix is fine
 # api_key_env = "MY_PROXY_KEY"
 #

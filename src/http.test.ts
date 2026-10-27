@@ -16,7 +16,7 @@ afterEach(() => {
 function provider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {
     name: "qwen",
-    api_type: "qwen",
+    api_type: "openai",
     base_url: "https://dashscope.example.com",
     ...overrides,
   };
@@ -113,7 +113,7 @@ describe("callApi: the binding decides task and timeout", () => {
         apiKey: API_KEY,
         request: imageRequest(),
       }),
-    ).rejects.toThrow('the "qwen" dialect has no "video" adapter yet');
+    ).rejects.toThrow('the "openai" dialect has no "video" adapter yet');
 
     expect(fetchMock).not.toHaveBeenCalled();
   });

@@ -26,7 +26,7 @@ let tempDir: string;
 function qwen(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {
     name: "dashscope",
-    api_type: "qwen",
+    api_type: "openai",
     base_url: "https://dashscope.aliyuncs.com",
     api_key_env: "DASHSCOPE_API_KEY",
     ...overrides,

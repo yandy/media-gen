@@ -1,4 +1,8 @@
-export type Dialect = "qwen" | "ark";
+/**
+ * A protocol family, not a vendor. `openai` is the OpenAI-compatible wire
+ * format; `qwen` survives only as a deprecated alias of it in config.toml.
+ */
+export type Dialect = "openai" | "dashscope" | "ark";
 
 /** A provider is the ledger — protocol, origin, credentials — never a model. */
 export interface ProviderConfig {

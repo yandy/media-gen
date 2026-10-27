@@ -55,10 +55,10 @@ const N_LIMIT = 6;
 
 /**
  * Light format check only: a tier, a `WxH` pair of positive integers joined by a
- * lowercase `x`, or `auto` on qwen. The value is passed to the vendor unchanged,
+ * lowercase `x`, or `auto` on the openai dialect. The value is passed to the vendor unchanged,
  * so arbitrary ark aspect ratios keep working without a per-vendor whitelist.
  */
-export function validateSize(size: string, apiType: Dialect): void {
+export function validateSize(size: string, dialect: Dialect): void {
   const value = size.trim();
 
   if (SIZE_TIERS.includes(value.toUpperCase())) return;
@@ -66,12 +66,12 @@ export function validateSize(size: string, apiType: Dialect): void {
   const pair = PIXEL_PAIR.exec(value);
   if (pair !== null && Number(pair[1]) > 0 && Number(pair[2]) > 0) return;
 
-  if (apiType === "qwen" && value.toLowerCase() === "auto") return;
+  if (dialect === "openai" && value.toLowerCase() === "auto") return;
 
   const accepted =
-    apiType === "qwen"
+    dialect === "openai"
       ? `a tier (${SIZE_TIERS.join(", ")}), a WxH pixel pair of positive integers using a lowercase "x" (e.g. 1024x1024), or "auto"`
-      : `a tier (${SIZE_TIERS.join(", ")}) or a WxH pixel pair of positive integers using a lowercase "x" (e.g. 1024x1024); "auto" is qwen-only`;
+      : `a tier (${SIZE_TIERS.join(", ")}) or a WxH pixel pair of positive integers using a lowercase "x" (e.g. 1024x1024); "auto" is openai-only`;
   throw new UsageError(`invalid --size ${JSON.stringify(size)}: expected ${accepted}`);
 }
 

@@ -10,7 +10,10 @@ import { QwenDialect } from "./qwen.js";
  * runtime against the keys that actually exist.
  */
 const DIALECTS: Record<Dialect, DialectAdapters> = {
-  qwen: { image: QwenDialect },
+  openai: { image: QwenDialect },
+  // Registered before its adapters exist so that `config.toml` naming it gets
+  // "no image adapter yet" rather than "unknown api_type".
+  dashscope: {},
   ark: { image: ArkDialect },
 };
 

@@ -211,15 +211,15 @@ describe("validateSize", () => {
     ["1K", "ark"],
     ["1.5K", "ark"],
     ["2K", "ark"],
-    ["3K", "qwen"],
-    ["4K", "qwen"],
+    ["3K", "openai"],
+    ["4K", "openai"],
     ["2k", "ark"],
-    ["1.5k", "qwen"],
+    ["1.5k", "openai"],
     ["1728x2160", "ark"],
-    ["1024x1024", "qwen"],
+    ["1024x1024", "openai"],
     ["100x100", "ark"],
-    ["auto", "qwen"],
-    ["AUTO", "qwen"],
+    ["auto", "openai"],
+    ["AUTO", "openai"],
   ];
 
   it.each(valid)("accepts %s for the %s dialect", (size, apiType) => {
@@ -229,16 +229,16 @@ describe("validateSize", () => {
   const invalid: Array<[string, Dialect]> = [
     ["auto", "ark"],
     ["huge", "ark"],
-    ["100*100", "qwen"],
+    ["100*100", "openai"],
     ["1024X1024", "ark"],
-    ["0x100", "qwen"],
-    ["100x0", "qwen"],
+    ["0x100", "openai"],
+    ["100x0", "openai"],
     ["1024x", "ark"],
     ["x1024", "ark"],
-    ["", "qwen"],
+    ["", "openai"],
     ["2KK", "ark"],
     ["1024x1024x1024", "ark"],
-    ["1024 x 1024", "qwen"],
+    ["1024 x 1024", "openai"],
   ];
 
   it.each(invalid)("rejects %s for the %s dialect", (size, apiType) => {
@@ -256,14 +256,14 @@ describe("validateSize", () => {
     expect(error.message).toContain('invalid --size ""');
   });
 
-  it("mentions that auto is qwen-only when an ark provider asks for it", () => {
+  it("mentions that auto is openai-only when an ark provider asks for it", () => {
     const error = thrownBy(() => validateSize("auto", "ark"));
 
-    expect(error.message).toContain("qwen-only");
+    expect(error.message).toContain("openai-only");
   });
 
   it("lists auto as an accepted form for qwen", () => {
-    const error = thrownBy(() => validateSize("nope", "qwen"));
+    const error = thrownBy(() => validateSize("nope", "openai"));
 
     expect(error.message).toContain('"auto"');
     expect(error.message).not.toContain("qwen-only");
