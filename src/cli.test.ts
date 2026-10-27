@@ -286,7 +286,7 @@ describe("mediagen config path", () => {
 });
 
 describe("mediagen config show", () => {
-  it("prints the built-in defaults with a source note for each value", async () => {
+  it("prints the seeded configuration with a source note for each value", async () => {
     const result = await run(["config", "show"]);
 
     expect(result.code).toBe(0);
@@ -365,7 +365,7 @@ api_key_env = "MY_PROXY_KEY"
     expect(result.stdout).not.toContain(API_KEY);
   });
 
-  it("reports an incomplete custom provider instead of failing", async () => {
+  it("reports an incomplete provider instead of failing", async () => {
     writeConfig('[providers.half-baked]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\n');
 
     const result = await run(["config", "show"]);
@@ -613,6 +613,55 @@ describe("mediagen config add: prototype-safe names", () => {
   });
 });
 
+describe("remedy messages", () => {
+  it("quotes a dotted provider name as a TOML key so the remedy can be pasted", async () => {
+    const result = await run(["login", "--provider", "my.proxy", "--api-key", API_KEY]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('[providers."my.proxy"]');
+  });
+
+  it("quotes a provider name that needs it when naming a command to run", async () => {
+    const result = await run([
+      "config", "add", 'we"ird',
+      "--api-type", "qwen", "--base-url", "https://k.example.com", "--model", "m",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(`--provider 'we"ird'`);
+  });
+
+  it("wraps an unwritable config dir instead of leaking the raw fs error", async () => {
+    const blocker = path.join(tempDir, "blocker");
+    fs.writeFileSync(blocker, "");
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(blocker, "config");
+
+    const result = await run([
+      "config", "add", "p1",
+      "--api-type", "qwen", "--base-url", "https://k.example.com", "--model", "m",
+    ]);
+
+    expect(result.code).toBe(1);
+    // Wrapped in a ConfigError naming the file, not a bare fs error on its own.
+    expect(result.stderr).toContain("cannot write");
+    expect(result.stderr).toContain(configPath());
+  });
+});
+
+describe("mediagen login: provider must be usable", () => {
+  it("refuses to store a key for an entry that cannot resolve", async () => {
+    // A hand-edited entry with no api_type: storing a key would look like success
+    // and then every generate would fail.
+    writeConfig('[providers.legacy]\nbase_url = "https://x"\nmodel = "m"\n');
+
+    const result = await run(["login", "--provider", "legacy", "--api-key", API_KEY]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("api_type");
+    expect(fs.existsSync(authPath())).toBe(false);
+  });
+});
+
 describe("mediagen auth status", () => {
   it("reports every provider as unconfigured with no auth file", async () => {
     const result = await run(["auth", "status"]);
@@ -657,7 +706,7 @@ describe("mediagen auth status", () => {
     expect(json.stdout).not.toContain(API_KEY);
   });
 
-  it("lists custom providers from config.toml", async () => {
+  it("lists every provider declared in config.toml", async () => {
     writeConfig(
       '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\nmodel = "m"\napi_key_env = "MY_PROXY_KEY"\n',
     );
@@ -764,7 +813,7 @@ describe("mediagen login", () => {
     expect(fs.existsSync(authPath())).toBe(false);
   });
 
-  it("accepts a custom provider defined in config.toml", async () => {
+  it("accepts a provider defined in config.toml", async () => {
     writeConfig(
       '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\nmodel = "m"\n',
     );

@@ -238,7 +238,7 @@ describe("resolveProvider", () => {
     expect(resolveProvider("my-proxy", loadConfig()).path).toBe("/custom/images");
   });
 
-  it("throws ConfigError naming api_type when a custom provider omits it", () => {
+  it("throws ConfigError naming api_type when a provider omits it", () => {
     writeConfig(
       '[providers.my-proxy]\nbase_url = "https://proxy.example.com"\nmodel = "some-model"\n',
     );
@@ -249,7 +249,7 @@ describe("resolveProvider", () => {
     expect(error.message).toContain("api_type");
   });
 
-  it("names every missing field for an incomplete custom provider", () => {
+  it("names every missing field for an incomplete provider", () => {
     writeConfig("[providers.my-proxy]\n");
 
     const error = thrownBy(() => resolveProvider("my-proxy", loadConfig()));

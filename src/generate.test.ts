@@ -358,7 +358,7 @@ describe("runGenerate", () => {
     expect(forbidden).not.toHaveBeenCalled();
   });
 
-  it("names the provider in the missing-key error for a custom provider", async () => {
+  it("names the provider in the missing-key error", async () => {
     writeConfig(`
 [providers.my-proxy]
 base_url = "https://proxy.example.com"

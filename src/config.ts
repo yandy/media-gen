@@ -5,6 +5,7 @@ import path from "node:path";
 import { parse, type TomlTable } from "smol-toml";
 import { ConfigError, malformedDocumentMessage, unreadableFileMessage } from "./errors.js";
 import { DIALECT_DEFAULT_PATHS, SEED_CONFIG } from "./providers.js";
+import { shellArg, tomlKey } from "./toml.js";
 import type { Dialect, ProviderConfig } from "./types.js";
 
 /** One entry from `[providers.<name>]` in config.toml, before validation. */
@@ -152,8 +153,8 @@ export function resolveProvider(name: string, config: MediagenConfig): ProviderC
   const entry = config.providers[name];
   if (entry === undefined) {
     throw new ConfigError(
-      `unknown provider "${name}": no [providers.${name}] table in ${file}; ` +
-        `add one by hand, or run "mediagen config add ${name} ` +
+      `unknown provider "${name}": no [providers.${tomlKey(name)}] table in ${file}; ` +
+        `add one by hand, or run "mediagen config add ${shellArg(name)} ` +
         `--api-type <qwen|ark> --base-url <url> --model <id>"`,
     );
   }

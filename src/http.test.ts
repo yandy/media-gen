@@ -423,7 +423,7 @@ describe("callImageApi: a 404 with an empty body", () => {
     expect(error.message).not.toContain(API_KEY);
   });
 
-  it("reports the workspace host for a qwen-dialect custom provider too", async () => {
+  it("reports the workspace host for a hand-declared qwen entry too", async () => {
     stubFetch(() => new Response("", { status: 404 }));
 
     const error = await rejection(

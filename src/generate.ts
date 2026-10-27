@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
+import { shellArg } from "./toml.js";
 import path from "node:path";
 import { getDialect } from "./api/index.js";
 import { resolveApiKey } from "./auth.js";
@@ -154,7 +155,7 @@ function ensureOutDir(dir: string): void {
 
 function missingKeyError(provider: ProviderConfig): ConfigError {
   // The hint must be a command that runs: login takes the provider as a flag.
-  const hints = [`run "mediagen login --provider ${provider.name}"`];
+  const hints = [`run "mediagen login --provider ${shellArg(provider.name)}"`];
   if (provider.api_key_env) hints.push(`set ${provider.api_key_env}`);
   hints.push("pass --api-key");
   return new ConfigError(

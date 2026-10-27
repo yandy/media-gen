@@ -12,9 +12,17 @@ export interface AuthFile {
 /** Where a resolved API key came from, highest precedence first. */
 export type ApiKeySource = "flag" | "env" | "auth";
 
+/** Every source except a per-invocation flag: what a stored key can come from. */
+export type StoredKeySource = Exclude<ApiKeySource, "flag">;
+
 export interface ResolvedApiKey {
   key: string;
   source: ApiKeySource;
+}
+
+export interface StoredApiKey {
+  key: string;
+  source: StoredKeySource;
 }
 
 export function authPath(): string {
@@ -71,6 +79,16 @@ export function maskKey(key: string): string {
  * entries of the same dialect can never pick up each other's credentials.
  * Returns `null` when no source is configured; the caller decides the message.
  */
+export function resolveApiKey(
+  provider: Pick<ProviderConfig, "name" | "api_key_env">,
+  flagKey: undefined,
+  env?: NodeJS.ProcessEnv,
+): StoredApiKey | null;
+export function resolveApiKey(
+  provider: Pick<ProviderConfig, "name" | "api_key_env">,
+  flagKey: string | undefined,
+  env?: NodeJS.ProcessEnv,
+): ResolvedApiKey | null;
 export function resolveApiKey(
   provider: Pick<ProviderConfig, "name" | "api_key_env">,
   flagKey: string | undefined,

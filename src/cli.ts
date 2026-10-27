@@ -13,12 +13,22 @@ import {
   resolveApiKey,
   saveApiKey,
   type ApiKeySource,
+  type StoredKeySource,
 } from "./auth.js";
-import { configPath, loadConfig, noProviderSelectedMessage, writeConfigFile, type MediagenConfig, type ProviderOverride } from "./config.js";
-import { UsageError } from "./errors.js";
+import {
+  configPath,
+  loadConfig,
+  noProviderSelectedMessage,
+  resolveProvider,
+  writeConfigFile,
+  type MediagenConfig,
+  type ProviderOverride,
+} from "./config.js";
+import { ConfigError, UsageError } from "./errors.js";
 import { runGenerate, type GenerateOptions } from "./generate.js";
 import { renderError, renderHuman, renderJson, type RenderedOutput } from "./output.js";
 import { DIALECT_DEFAULT_PATHS } from "./providers.js";
+import { shellArg, tomlBasicString, tomlKey } from "./toml.js";
 
 /**
  * Everything the CLI needs from the outside world that tests must be able to
@@ -47,7 +57,7 @@ interface ConfiguredValue {
 
 interface KeyStatus {
   configured: boolean;
-  source: ApiKeySource | "none";
+  source: StoredKeySource | "none";
   masked_key?: string;
 }
 
@@ -119,7 +129,7 @@ Subcommands:
   login / logout    store or remove a provider's API key in auth.json; provider
                     definitions live in config.toml
   auth status       which key each provider would use and where it came from (masked)
-  config show       the resolved configuration, with a source note per value
+  config show       the resolved configuration, with a source note for each value
   config path       where config.toml lives
   config add        create a provider in config.toml (edit the file for anything else)
 
@@ -306,7 +316,7 @@ export function createProgram(options: ProgramOptions = {}): Command {
   const config = program.command("config").description("Inspect the resolved configuration");
   config
     .command("show")
-    .description("Print the effective configuration with a source note per value")
+    .description("Print the effective configuration with a source note for each value")
     .option("--json", "print a JSON result")
     .action(async (flags: { json?: boolean }) => {
       runConfigShow(flags);
@@ -530,12 +540,20 @@ async function runLogin(flags: LoginFlags, deps: CliDeps): Promise<void> {
  */
 function assertKnownProvider(name: string, config: MediagenConfig): void {
   if (name === "") throw new UsageError(noProviderSelectedMessage());
-  if (Object.hasOwn(config.providers, name)) return;
-  throw new UsageError(
-    `unknown provider "${name}": login stores API keys but never creates providers; ` +
-      `add a [providers.${name}] table to ${configPath()} first ` +
-      `(or run "mediagen config add ${name} ...")`,
-  );
+  if (!Object.hasOwn(config.providers, name)) {
+    throw new UsageError(
+      `unknown provider "${name}": login stores API keys but never creates providers; ` +
+        `add a [providers.${tomlKey(name)}] table to ${configPath()} first ` +
+        `(or run "mediagen config add ${shellArg(name)} ...")`,
+    );
+  }
+  // A provider that exists but cannot resolve is just as unusable as a missing
+  // one, and storing a key for it would look like success and then fail later.
+  try {
+    resolveProvider(name, config);
+  } catch (error) {
+    throw new UsageError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function resolveLoginKey(
@@ -651,14 +669,13 @@ function runAuthStatus(flags: { json?: boolean }): void {
  * that name and the entry's own `api_key_env`. An incomplete config.toml entry
  * can therefore still be reported instead of failing the whole command.
  */
-function describeKeySource(apiKeyEnv: string | undefined, source: ApiKeySource): string {
-  if (source === "flag") return "--api-key";
+function describeKeySource(apiKeyEnv: string | undefined, source: StoredKeySource): string {
   if (source === "env") return `env ${apiKeyEnv ?? "environment variable"}`;
   return `auth.json: ${authPath()}`;
 }
 
 function missingKeyHint(name: string, apiKeyEnv: string | undefined): string {
-  const hints = [`run "mediagen login --provider ${name}"`];
+  const hints = [`run "mediagen login --provider ${shellArg(name)}"`];
   if (apiKeyEnv !== undefined) hints.push(`set ${apiKeyEnv}`);
   hints.push("pass --api-key");
   return hints.join(", ");
@@ -707,8 +724,10 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
   // the same surroundings the user will.
   const config = loadConfig();
   if (Object.hasOwn(config.providers, provider)) {
+    // True whether the name is a real entry or a table that already nests one
+    // (`[providers.a.b]`), which appending would also redefine.
     throw new UsageError(
-      `provider "${provider}" already exists in ${file}; edit that table by hand instead`,
+      `a [providers.${tomlKey(provider)}] section already exists in ${file}; edit it by hand instead`,
     );
   }
 
@@ -724,17 +743,23 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
   const beforeTable = before.trim() === "" ? undefined : parseToml(before);
   const after = appendProviderTable(before, provider, fields);
   assertFaithfulRewrite(beforeTable, after, provider, fields, file);
-  writeConfigFile(after);
+  try {
+    writeConfigFile(after);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ConfigError(`cannot write ${file}: ${reason}`);
+  }
 
   if (flags.json === true) {
     writeLine(JSON.stringify({ ok: true, provider, config_file: file, fields }));
     return;
   }
 
+  const loginHint = `mediagen login --provider ${shellArg(provider)} --api-key ...`;
   const keyRoute =
     apiKeyEnv === undefined
-      ? `run "mediagen login --provider ${provider} --api-key ..." to store its key`
-      : `set ${apiKeyEnv}, or run "mediagen login --provider ${provider} --api-key ..."`;
+      ? `run "${loginHint}" to store its key`
+      : `set ${shellArg(apiKeyEnv)}, or run "${loginHint}"`;
   writeLine([`added provider "${provider}" to ${file}`, keyRoute].join("\n"));
 }
 
@@ -889,24 +914,6 @@ function appendProviderTable(text: string, name: string, fields: Record<string, 
   }
   const base = text.trim() === "" ? "" : text.endsWith("\n") ? `${text}\n` : `${text}\n\n`;
   return `${base}${lines.join("\n")}\n`;
-}
-
-function isBareTomlKey(value: string): boolean {
-  return /^[A-Za-z0-9_-]+$/.test(value);
-}
-
-function tomlKey(name: string): string {
-  return isBareTomlKey(name) ? name : tomlBasicString(name);
-}
-
-function tomlBasicString(value: string): string {
-  const escaped = value
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t");
-  return `"${escaped}"`;
 }
 
 /**

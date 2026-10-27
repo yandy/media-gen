@@ -170,7 +170,7 @@ describe("smoke: mediagen image generate (qwen, text to image)", () => {
     expect(code).toBe(0);
     expect(stderr()).toBe("");
 
-    // One API request, to the built-in qwen endpoint, with the env key.
+    // One API request, to the seeded qwen endpoint, with the env key.
     expect(calls).toHaveLength(2);
     const api = calls[0];
     expect(api.method).toBe("POST");
