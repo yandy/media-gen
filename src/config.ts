@@ -91,9 +91,18 @@ export function ensureConfigFile(): void {
     // writing a config is never clobbered by the seed.
     fs.writeFileSync(file, SEED_CONFIG, { flag: "wx" });
   } catch (error) {
-    // A concurrent run may have won the race between existsSync and "wx";
-    // that is success, not a failure to report.
-    if (fs.existsSync(file)) return;
+    // Only losing the create race is success: "wx" fails with EEXIST when a
+    // concurrent run wrote the file first. Any other failure (ENOSPC, EDQUOT,
+    // EIO) may have left a truncated seed behind, and a truncated seed parses as
+    // a valid config with no providers — the exact state that never repairs
+    // itself, because the seed is only ever written when the file is absent.
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EEXIST" && fs.existsSync(file)) return;
+    try {
+      fs.unlinkSync(file);
+    } catch {
+      // The file may never have been created.
+    }
     throw new ConfigError(unwritableFileMessage(file, error));
   }
 }

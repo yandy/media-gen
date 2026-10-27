@@ -303,6 +303,15 @@ describe("config bootstrap", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("Models");
   });
+
+  it("still serves the implicit help command when config.toml is malformed", async () => {
+    writeConfig('[providers.qwen\nbase_url = "https://x"\n');
+
+    const result = await run(["help"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Usage: mediagen");
+  });
 });
 
 describe("requestsHelpOrVersion", () => {
@@ -316,6 +325,11 @@ describe("requestsHelpOrVersion", () => {
 
   it("does not treat a prompt after -- as a help request", () => {
     expect(requestsHelpOrVersion(["image", "generate", "--", "--help"])).toBe(false);
+  });
+
+  it("treats commander's implicit help command as exempt", () => {
+    expect(requestsHelpOrVersion(["help"])).toBe(true);
+    expect(requestsHelpOrVersion(["help", "image", "generate"])).toBe(true);
   });
 
   it("is false for ordinary commands", () => {

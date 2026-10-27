@@ -367,11 +367,16 @@ export function createProgram(options: ProgramOptions = {}): Command {
 
 /**
  * `--help` and `--version` must work when config.toml is broken or cannot be
- * created, so they skip the bootstrap. The scan stops at `--` so a prompt that
- * happens to read "--help" (`image generate -- --help`) is not mistaken for a
- * request for help.
+ * created, so they skip the bootstrap. Commander's implicit `help` command is
+ * exempt too: it is printed in the CLI's own command list, so a user whose config
+ * is broken will reach for it. The scan stops at `--` so a prompt that happens to
+ * read "--help" (`image generate -- --help`) is not mistaken for a request for
+ * help.
  */
 export function requestsHelpOrVersion(argv: string[]): boolean {
+  // `help [command]` only exists as the first token; anything later is a value.
+  if (argv[0] === "help") return true;
+
   for (const arg of argv) {
     if (arg === "--") return false;
     if (arg === "-h" || arg === "--help" || arg === "-V" || arg === "--version") return true;

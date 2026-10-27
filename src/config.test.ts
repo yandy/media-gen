@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configDir,
   configPath,
@@ -227,6 +227,42 @@ describe("ensureConfigFile", () => {
     ensureConfigFile();
 
     expect(fs.readFileSync(configPath(), "utf8")).toBe('default_provider = "mine"\n');
+  });
+
+  it("removes the truncated file and reports the errno when the write fails after the create", () => {
+    const blockedDir = path.join(tempDir, "config");
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = blockedDir;
+    const file = path.join(blockedDir, "config.toml");
+
+    // A real ENOSPC/EDQUOT needs a full or quota-capped filesystem, so the one
+    // failure shape that leaves a file behind is simulated: open succeeded, the
+    // write threw. A truncated seed parses as a valid config with no providers,
+    // which is the state this whole bootstrap change exists to eliminate.
+    const realWrite = fs.writeFileSync;
+    const spy = vi.spyOn(fs, "writeFileSync").mockImplementation(((
+      target: fs.PathOrFileDescriptor,
+      data: string | NodeJS.ArrayBufferView,
+      options?: fs.WriteFileOptions,
+    ) => {
+      realWrite(target, typeof data === "string" ? data.slice(0, 240) : data, options);
+      const error = new Error("no space left on device") as NodeJS.ErrnoException;
+      error.code = "ENOSPC";
+      throw error;
+    }) as typeof fs.writeFileSync);
+
+    try {
+      const error = thrownBy(() => ensureConfigFile());
+
+      expect(error).toBeInstanceOf(ConfigError);
+      expect(error.message).toContain(file);
+      expect(error.message).toContain("ENOSPC");
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The half-written seed must not survive: the next run would read it as
+    // "no providers configured" and never rewrite it.
+    expect(fs.existsSync(file)).toBe(false);
   });
 });
 
