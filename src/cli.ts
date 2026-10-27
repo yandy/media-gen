@@ -197,28 +197,34 @@ function imageHelpText(command: "generate" | "edit"): string {
   mediagen image generate "product photo on a white background" --provider my-proxy --out-dir ./shots
 
   # a one-off test against a proxy, without touching config.toml
-  mediagen image generate "colour test card" --provider dashscope --base-url https://proxy.example.com/v1 --api-key sk-...`;
+  mediagen image generate "colour test card" --provider aliyun --base-url https://proxy.example.com --api-key sk-...`;
 
   return `
 ${intro}
 
 Models (--provider picks the account, --model the exact id; config.toml decides what is allowed):
-  qwen-image-3.0              dashscope   best text rendering (CJK + Latin) and image editing
+  qwen-image-3.0              aliyun      best text rendering (CJK + Latin) and image editing
   doubao-seedream-5-0-flash   volcengine  fastest; use it for drafts and iteration
   doubao-seedream-5-0-pro     volcengine  highest quality; slower and more expensive
-  A model must be listed in models = [...] under [providers.<name>.image]; the two
-  provider names above are what the first run writes into config.toml, and a second
-  model of the same vendor is one more entry there, not another provider.
+  A model must be listed in models = [...] under [providers.<name>.image]; the provider
+  names above are what the first run writes into config.toml, and a second model of the
+  same vendor is one more entry there, not another provider.
+
+Protocols (api_type, declared per task in config.toml):
+  openai     the OpenAI-compatible wire format; "qwen" still works as an alias
+  dashscope  Alibaba's native form: input.messages + parameters, output.choices[].image
+  ark        Volcengine's own API (image + video)
 
 Sizes (--size, passed through to the vendor; omit it for the vendor default):
-  tiers    1K | 1.5K | 2K | 3K | 4K     ark takes these (its default is 2K)
+  tiers    1K | 1.5K | 2K | 3K | 4K     ark and openai take these (ark defaults to 2K)
   pixels   WxH with a lowercase x, e.g. 2048x2048, 1536x2048, 1024x1024
-  auto     qwen only; omitting --size lets qwen choose a resolution from the prompt
+  auto     openai only; omitting --size lets the model choose from the prompt
+  dashscope takes pixels only; it sends 宽*高 and rejects tiers and auto.
 
 Images and count:
   --image <path-or-url>  repeatable; a local file becomes a data:<mime>;base64 URL
   --n <count>            1-6 images. ark fans out into one paid request per image
-                         (seeds seed, seed+1, ...); qwen sends a single request.
+                         (seeds seed, seed+1, ...); openai and dashscope send a single request.
 
 Output:
   Files are written to --out-dir (default: config output_dir, else the current
@@ -228,9 +234,10 @@ Output:
   exits 0 and lists each failure: the images on disk were already paid for, so do not
   retry the whole request.
 
-Vendor-specific flags:
-  qwen only  --negative-prompt --prompt-extend --prompt-extend-mode --enable-thinking
-  ark only   --output-format --optimize-prompt --layer-decomposition --background
+Protocol-specific flags:
+  openai only  --prompt-extend-mode --enable-thinking
+  openai and dashscope  --negative-prompt --prompt-extend
+  ark only  --output-format --optimize-prompt --layer-decomposition --background
   A flag the selected dialect does not accept fails before any paid request is sent.
   Boolean flags take an explicit value: --watermark false, not --no-watermark.
 
@@ -242,14 +249,14 @@ const IMAGE_OPTION_HELP = {
   provider: "provider name declared in config.toml (default: config default_provider)",
   model: "model id, must be listed in the task's models (default: the task's default)",
   image: "reference image, repeatable; local files are sent as data URLs",
-  size: "1K|1.5K|2K|3K|4K, WxH pixels, or auto (qwen only)",
+  size: "1K|1.5K|2K|3K|4K, WxH pixels, or auto (openai only; dashscope takes pixels)",
   n: "how many images, 1-6 (ark sends one paid request per image)",
   seed: "random seed; ark fan-out uses seed, seed+1, ...",
-  watermark: "true|false (default: the vendor default, qwen false / ark true)",
-  negativePrompt: "qwen only: what the image must not contain",
-  promptExtend: "qwen only: true|false prompt rewriting",
-  promptExtendMode: "qwen only: agent mode is text-to-image only",
-  enableThinking: "qwen only: true|false",
+  watermark: "true|false (default: the vendor default, false on openai and dashscope)",
+  negativePrompt: "openai and dashscope: what the image must not contain",
+  promptExtend: "openai and dashscope: true|false prompt rewriting",
+  promptExtendMode: "openai only: agent mode is text-to-image only",
+  enableThinking: "openai only: true|false",
   outputFormat: "ark only (default: the vendor default, jpeg)",
   optimizePrompt: "ark only; flash models accept standard only",
   layerDecomposition: "ark only: true|false, needs --image, returns several files",
@@ -787,16 +794,18 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
     );
   }
 
+  // The protocol is declared per task: `api_type` is written into the task table
+  // below, so the provider table is only the account (host + key).
+  const dialect = apiType === "qwen" ? "openai" : apiType;
   const fields: Record<string, string> = {
-    api_type: apiType === "qwen" ? "openai" : apiType,
     base_url: originBaseUrl(flags.baseUrl),
   };
   if (apiKeyEnv !== undefined) fields.api_key_env = apiKeyEnv;
 
   const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
   const beforeTable = before.trim() === "" ? undefined : parseToml(before);
-  const after = appendProviderTable(before, provider, fields, task, model);
-  assertFaithfulRewrite(beforeTable, after, provider, fields, task, model, file);
+  const after = appendProviderTable(before, provider, fields, task, model, dialect);
+  assertFaithfulRewrite(beforeTable, after, provider, fields, task, model, dialect, file);
   try {
     writeConfigFile(after);
   } catch (error) {
@@ -806,7 +815,14 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
 
   if (flags.json === true) {
     writeLine(
-      JSON.stringify({ ok: true, provider, task, model, config_file: file, fields }),
+      JSON.stringify({
+        ok: true,
+        provider,
+        task,
+        model,
+        config_file: file,
+        fields: { ...fields, api_type: dialect },
+      }),
     );
     return;
   }
@@ -816,7 +832,7 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
     apiKeyEnv === undefined
       ? `run "${loginHint}" to store its key`
       : `set ${shellArg(apiKeyEnv)}, or run "${loginHint}"`;
-    if (adapterPath(apiType === "qwen" ? "openai" : apiType, task) === undefined) {
+    if (adapterPath(dialect, task) === undefined) {
     writeErrLine(
       `note: no dialect has a "${task}" adapter yet; the table is stored and ` +
         `"config show" will mark it until video lands`,
@@ -1099,12 +1115,14 @@ function appendProviderTable(
   fields: Record<string, string>,
   task: string,
   model: string,
+  dialect: string,
 ): string {
   const lines = [`[providers.${tomlKey(name)}]`];
   for (const [key, value] of Object.entries(fields)) {
     lines.push(`${key} = ${tomlBasicString(value)}`);
   }
   lines.push("", `[providers.${tomlKey(name)}.${task}]`);
+  lines.push(`api_type = ${tomlBasicString(dialect)}`);
   lines.push(`default = ${tomlBasicString(model)}`);
   lines.push(`models = [${tomlBasicString(model)}]`);
   const base = text.trim() === "" ? "" : text.endsWith("\n") ? `${text}\n` : `${text}\n\n`;
@@ -1124,6 +1142,7 @@ function assertFaithfulRewrite(
   expected: Record<string, string>,
   task: string,
   model: string,
+  apiType: string,
   file: string,
 ): void {
   function fail(): never {
@@ -1145,6 +1164,7 @@ function assertFaithfulRewrite(
   }
 
   const taskTable = tableAt(parsed, ["providers", name, task]);
+  if (taskTable?.api_type !== apiType) fail();
   if (taskTable?.default !== model) fail();
   const models = taskTable?.models;
   if (!Array.isArray(models) || models.length !== 1 || models[0] !== model) fail();

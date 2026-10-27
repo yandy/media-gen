@@ -390,6 +390,32 @@ describe("mediagen config path", () => {
   });
 });
 
+describe("mediagen config add: where the protocol is written", () => {
+  it("writes api_type into the task table, not the provider table", async () => {
+    const result = await run([
+      "config",
+      "add",
+      "gw",
+      "--api-type",
+      "dashscope",
+      "--base-url",
+      "https://gw.example.com",
+      "--model",
+      "qwen-image-2.0-pro",
+    ]);
+
+    expect(result.code).toBe(0);
+    const text = readConfig();
+    const providerTable = text.slice(
+      text.indexOf("[providers.gw]"),
+      text.indexOf("[providers.gw.image]"),
+    );
+    expect(providerTable).not.toContain("api_type");
+    expect(text).toContain('api_type = "dashscope"');
+    expect(loadConfig().providers.gw?.tasks.image?.api_type).toBe("dashscope");
+  });
+});
+
 describe("mediagen config show", () => {
   it("never writes the file it reads", async () => {
     writeConfig('default_provider = "mine"\n');
@@ -1111,7 +1137,7 @@ describe("mediagen image generate", () => {
     process.env.DASHSCOPE_API_KEY = API_KEY;
     const { calls } = stubFetch(() => apiResponse([{ url: "https://cdn.example.com/a.png" }]));
 
-    const result = await run(["image", "generate", "a red fox", "--provider", "dashscope"]);
+    const result = await run(["image", "generate", "a red fox", "--provider", "aliyun"]);
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("workspace-id");
@@ -1492,7 +1518,9 @@ models = ["doubao-seedance-1-0-pro"]
     ]);
 
     expect(result.code).toBe(0);
+    // --api-type qwen is the deprecated alias; the file records the real name.
     expect(loadConfig().providers["my-proxy"].tasks.image).toEqual({
+      api_type: "openai",
       default: "qwen-image-3.0",
       models: ["qwen-image-3.0"],
     });
@@ -1511,6 +1539,7 @@ models = ["doubao-seedance-1-0-pro"]
 
     expect(result.code).toBe(0);
     expect(loadConfig().providers.vid.tasks.video).toEqual({
+      api_type: "ark",
       default: "doubao-seedance-1-0-pro",
       models: ["doubao-seedance-1-0-pro"],
     });
