@@ -113,6 +113,13 @@ export type Dialect = "openai" | "dashscope" | "ark";
   `api_type = qwen (deprecated alias of openai)`，让旧名可见地过期，而不是悄悄永久化。
 - 常量与错误文案全部改用新名；`src/api/qwen.ts` 的文件名本轮不必改（纯内部命名）。
 
+### 4.1.1 种子里的阿里云条目默认走原生
+
+用户决策（2026-10-28）：「阿里云默认 dashscope」。因此
+`[providers.aliyun.image] api_type = "dashscope"`，`base_url` 用公网域名
+`https://dashscope.aliyuncs.com`（原生端点在公网即可用），种子不再带
+`<workspace-id>` 占位符、开箱可跑。要改用 OpenAI 兼容协议，才需要换成业务空间专属域名。
+
 ### 4.2 `api_type` 下沉到任务表，provider 级保留为默认
 
 ```toml

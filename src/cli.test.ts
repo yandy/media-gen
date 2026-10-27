@@ -515,9 +515,7 @@ describe("mediagen config show", () => {
     expect(result.stdout).toContain(configPath());
     expect(result.stdout).toMatch(/default_provider:\s+volcengine \(config\.toml\)/);
     expect(result.stdout).toMatch(/output_dir:\s+\S+ \(default/);
-    expect(result.stdout).toContain(
-      "https://<workspace-id>.cn-beijing.maas.aliyuncs.com (config.toml)",
-    );
+    expect(result.stdout).toContain("https://dashscope.aliyuncs.com (config.toml)");
     expect(result.stdout).toContain("https://ark.cn-beijing.volces.com (config.toml)");
     expect(result.stdout).toContain(`${ARK_URL} (computed)`);
     expect(result.stdout).toMatch(/not set/);
@@ -1208,8 +1206,10 @@ describe("mediagen logout", () => {
 });
 
 describe("mediagen image generate", () => {
-  it("refuses to send a request while the qwen placeholder is unedited", async () => {
-    fs.rmSync(configPath(), { force: true });
+  it("refuses to send a request while a base_url placeholder is unedited", async () => {
+    writeConfig(
+      '[providers.aliyun]\nbase_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"\napi_key_env = "DASHSCOPE_API_KEY"\n\n[providers.aliyun.image]\napi_type = "openai"\ndefault = "qwen-image-3.0"\nmodels = ["qwen-image-3.0"]\n',
+    );
     process.env.DASHSCOPE_API_KEY = API_KEY;
     const { calls } = stubFetch(() => apiResponse([{ url: "https://cdn.example.com/a.png" }]));
 
@@ -1638,10 +1638,12 @@ models = ["doubao-seedance-1-0-pro"]
   });
 
   it("does not confuse an unfinished base_url with a missing adapter", async () => {
-    // The seed's qwen host is still <workspace-id>, so the endpoint cannot be
-    // computed — but the qwen dialect *does* have an image adapter, and saying
-    // "(no adapter yet)" there would send the user hunting for a code change.
-    fs.rmSync(configPath(), { force: true });
+    // A hand-written `<workspace-id>` host cannot produce an endpoint — but the
+    // openai dialect *does* have an image adapter, and "(no adapter yet)" there
+    // would send the user hunting for a code change.
+    writeConfig(
+      '[providers.aliyun]\nbase_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"\napi_key_env = "DASHSCOPE_API_KEY"\n\n[providers.aliyun.image]\napi_type = "openai"\ndefault = "qwen-image-3.0"\nmodels = ["qwen-image-3.0"]\n\n[providers.aliyun.video]\napi_type = "dashscope"\ndefault = "qwen-video"\nmodels = ["qwen-video"]\n',
+    );
 
     const result = await run(["config", "show"]);
 

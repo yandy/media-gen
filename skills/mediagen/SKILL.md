@@ -34,14 +34,12 @@ mediagen config show        # prints what resolves; any command creates config.t
 ```
 
 `base_url` is the origin: the protocol appends the endpoint path, version segment
-included, per task. Bailian's OpenAI-compatible endpoint (`compatible-mode`) is only
-served on a workspace-scoped host, so the seeded `[providers.aliyun].base_url` is a
-placeholder you must finish:
-replace `<workspace-id>` with your workspace id, e.g.
-`https://abc123.cn-beijing.maas.aliyuncs.com` (ark's seed is usable as written).
-Until then, `image generate` and `image edit` against that provider exit 1 without
-sending anything; `config show`, `config path` and `auth status` still work, and
-`login` exits 2 with the same message.
+included, per task. Both seeded entries run as written: `volcengine` on Ark, `aliyun`
+on Bailian's native protocol (`api_type = "dashscope"`), which the public host serves.
+Bailian's OpenAI-compatible endpoint (`compatible-mode`) is only served on a
+workspace-scoped host — switch `base_url` to
+`https://{workspace-id}.cn-beijing.maas.aliyuncs.com` if you want that protocol. A
+`base_url` still containing `<...>` is rejected before sending anything.
 
 Each provider holds `models = [...]` per task, and a model that is not listed there is
 refused before anything is sent: add the id to that list instead of creating another

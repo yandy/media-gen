@@ -112,7 +112,7 @@ default  = "doubao-seedance-1-0-pro"
 models   = ["doubao-seedance-1-0-pro"]
 
 [providers.aliyun]
-base_url    = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"
+base_url    = "https://dashscope.aliyuncs.com"
 api_key_env = "DASHSCOPE_API_KEY"
 
 [providers.aliyun.image]
@@ -144,8 +144,9 @@ models   = ["qwen-image-2.0-pro"]
 所以换任务只换 path。若在厂商自有域名上仍以 `/api/v3`、`/api/v1` 或
 `/compatible-mode/v1` 结尾，会在发请求前被拒绝，并给出应填的 origin。
 文件是唯一真相：内置没有任何 provider，首次运行只是把上面这份内容写进 `config.toml`
-供你修改。种子 `aliyun` 那条带 `<workspace-id>` 占位符，只有当它被选中时才会在花钱前报错，
-所以只需要改这一行。
+供你修改。种子两条都能直接跑：`volcengine` 走 Ark，`aliyun` 走百炼原生协议（公网域名即可）。
+若要把 `aliyun` 换成 OpenAI 兼容协议，需改用业务空间专属域名
+`https://{workspace-id}.cn-beijing.maas.aliyuncs.com` —— 那个端点不对外公开提供。
 
 **如果某个主机的 API 不在厂商自己的路径下** —— 例如网关，或某个把 `/api/v3` 换成
 `/api/plan/v3` 的套餐 —— 在任务表上用 `path` 声明这段前缀，适配器就不再追加：

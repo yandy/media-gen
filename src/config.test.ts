@@ -212,16 +212,15 @@ describe("prepareConfigFile", () => {
     });
   });
 
-  it("seeds a layout where only qwen needs an edit", () => {
+  it("seeds a layout that runs as written", () => {
     ensureConfigFile();
     const text = fs.readFileSync(configPath(), "utf8");
 
     expect(text).toContain('default_provider = "volcengine"');
     expect(text).toMatch(/^base_url\s*=\s*"https:\/\/ark\.cn-beijing\.volces\.com"$/m);
-    // Only the workspace host needs an edit; everything else is ready to run.
-    expect(text).toMatch(
-      /^base_url\s*=\s*"https:\/\/<workspace-id>\.cn-beijing\.maas\.aliyuncs\.com"$/m,
-    );
+    // Alibaba is the native protocol on the public host: no placeholder to finish.
+    expect(text).toMatch(/^base_url\s*=\s*"https:\/\/dashscope\.aliyuncs\.com"$/m);
+    expect(text).not.toContain("<workspace-id>");
     expect(text).not.toMatch(/^path\s*=/m);
     expect(text).not.toMatch(/^output_dir\s*=/m);
   });

@@ -119,7 +119,7 @@ default  = "doubao-seedance-1-0-pro"
 models   = ["doubao-seedance-1-0-pro"]
 
 [providers.aliyun]
-base_url    = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"
+base_url    = "https://dashscope.aliyuncs.com"
 api_key_env = "DASHSCOPE_API_KEY"
 
 [providers.aliyun.image]
@@ -154,9 +154,11 @@ The version segment belongs to the endpoint, which the dialect owns per task
 task changes only the path. A `base_url` that still ends with `/api/v3`, `/api/v1` or
 `/compatible-mode/v1` on a vendor host is refused before any request, with the origin
 to paste in. The file is the only source of truth: nothing is built in, and the first
-run just writes the above into `config.toml` for you to edit. The seeded `aliyun` entry
-carries a `<workspace-id>` placeholder which commands reject before spending anything
-when that provider is the one selected, so only that line needs your attention.
+run just writes the above into `config.toml` for you to edit. Both seeded entries run as
+written: `volcengine` on Ark and `aliyun` on Bailian's native protocol, which is served on
+the public host. Move `aliyun` to your workspace host
+(`https://{workspace-id}.cn-beijing.maas.aliyuncs.com`) when you switch it to the
+OpenAI-compatible protocol — that endpoint is not served publicly.
 
 **A host whose API does not live at the vendor's own path** — a gateway, or a plan
 that serves `/api/plan/v3` instead of `/api/v3` — declares that prefix on the task
@@ -183,8 +185,8 @@ the same dialect can use different keys. Keys are only ever printed masked.
 `base_url` lives in the file (with a one-off `--base-url` override on
 `image generate`), and it is validated before any request: Bailian's
 OpenAI-compatible endpoint (`compatible-mode`) is served only on a workspace-scoped
-host, so the seed keeps a placeholder that fails loudly instead. Bailian's native
-endpoint, which the `dashscope` protocol speaks, is served on the public host too. `mediagen config show` prints each provider's
+host, and the seed therefore ships the native protocol, whose endpoint is served
+publicly. A `base_url` that still contains `<...>` is rejected before spending anything. `mediagen config show` prints each provider's
 tasks, their models, and the endpoint each one would actually hit. Set
 `NODE_USE_ENV_PROXY=1` on Node >= 24 to honour `HTTP_PROXY`. Timeouts: per request
 `timeout_seconds` for the task (default 300 s, video 1800 s), 120 s per download.

@@ -41,16 +41,15 @@ default  = "doubao-seedance-1-0-pro"
 models   = ["doubao-seedance-1-0-pro"]
 
 [providers.aliyun]
-# The public host does not serve the images API. Replace the placeholder with
-# your workspace id, e.g. https://abc123.cn-beijing.maas.aliyuncs.com
-base_url    = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"
+# Bailian's native protocol is served on the public host, so this entry works as
+# written. For the OpenAI-compatible protocol use your workspace-scoped host
+# instead — https://{workspace-id}.cn-beijing.maas.aliyuncs.com — which is also
+# where Alibaba recommends sending native calls.
+base_url    = "https://dashscope.aliyuncs.com"
 api_key_env = "DASHSCOPE_API_KEY"
 
 [providers.aliyun.image]
-# Bailian also documents the native protocol for these models; if this endpoint
-# answers 404 on your workspace, switch the line below to api_type = "dashscope"
-# and drop the workspace host in favour of https://dashscope.aliyuncs.com.
-api_type = "openai"
+api_type = "dashscope"          # input.messages + parameters, output.choices[].image
 default  = "qwen-image-3.0"
 models   = ["qwen-image-3.0"]
 
