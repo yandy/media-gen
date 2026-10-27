@@ -104,8 +104,13 @@ beforeEach(() => {
   fs.mkdirSync(path.dirname(link), { recursive: true });
   fs.symlinkSync(entry, link);
 
-  env = { ...process.env, MEDIAGEN_CLI_CONFIG_DIR: configDir };
+  env = {
+    ...process.env,
+    MEDIAGEN_CLI_CONFIG_DIR: configDir,
+    MEDIAGEN_CLI_STATE_DIR: path.join(tempDir, "state"),
+  };
   delete env.XDG_CONFIG_HOME;
+  delete env.XDG_STATE_HOME;
 });
 
 afterEach(() => {

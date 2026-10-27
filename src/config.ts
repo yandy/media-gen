@@ -21,6 +21,23 @@ export function configDir(): string {
   return path.join(os.homedir(), ".config", "mediagen-cli");
 }
 
+/**
+ * Where non-editable state lives — today the API key store. Deliberately not
+ * `~/.config`: that directory is the one people sync, share and commit, and a
+ * 0600 secret sitting next to an editable config is how keys leak into git.
+ * XDG_STATE_HOME is defined as machine-local state that should not be synced,
+ * which is exactly what a device-bound credential is.
+ */
+export function stateDir(): string {
+  const override = process.env.MEDIAGEN_CLI_STATE_DIR;
+  if (override) return override;
+
+  const xdgStateHome = process.env.XDG_STATE_HOME;
+  if (xdgStateHome) return path.join(xdgStateHome, "mediagen-cli");
+
+  return path.join(os.homedir(), ".local", "state", "mediagen-cli");
+}
+
 export function configPath(): string {
   return path.join(configDir(), "config.toml");
 }

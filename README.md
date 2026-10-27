@@ -76,9 +76,15 @@ retried.
 
 ## Configuration
 
-`config.toml` and `auth.json` (mode `600`) live in the first of
-`$MEDIAGEN_CLI_CONFIG_DIR`, `$XDG_CONFIG_HOME/mediagen-cli`,
-`~/.config/mediagen-cli`.
+`config.toml` — the file you edit — lives in the first of
+`$MEDIAGEN_CLI_CONFIG_DIR`, `$XDG_CONFIG_HOME/mediagen-cli`, `~/.config/mediagen-cli`.
+
+`auth.json` (mode `600`) is **state, not config**, and lives apart from it: the first
+of `$MEDIAGEN_CLI_STATE_DIR`, `$XDG_STATE_HOME/mediagen-cli`,
+`~/.local/state/mediagen-cli`. `~/.config` is the directory people sync, share and
+commit; a key store there is one `.gitignore` mistake away from a leaked key. The
+state directory is machine-local by definition, which is what a device-bound
+credential is.
 
 ```toml
 default_provider = "volcengine"

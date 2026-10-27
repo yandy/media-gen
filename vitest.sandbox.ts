@@ -5,8 +5,9 @@ import path from "node:path";
 import { afterAll } from "vitest";
 
 /**
- * Every test file starts with throwaway HOME / XDG_CONFIG_HOME /
- * MEDIAGEN_CLI_CONFIG_DIR, set before the file's own imports run. A test that
+ * Every test file starts with throwaway HOME / XDG_CONFIG_HOME / XDG_STATE_HOME /
+ * MEDIAGEN_CLI_CONFIG_DIR / MEDIAGEN_CLI_STATE_DIR, set before the file's own
+ * imports run. A test that
  * forgets to isolate itself then cannot read or write the developer's real
  * config — isolation stops being a convention each file has to remember.
  *
@@ -17,6 +18,7 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-test-home-"));
 process.env.HOME = sandbox;
 process.env.XDG_CONFIG_HOME = path.join(sandbox, "xdg");
 process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(sandbox, "mediagen-cli");
+process.env.MEDIAGEN_CLI_STATE_DIR = path.join(sandbox, "mediagen-cli-state");
 
 const repoRoot = process.cwd();
 const before = new Set(fs.readdirSync(repoRoot));

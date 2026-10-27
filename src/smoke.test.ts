@@ -26,6 +26,8 @@ const IMAGE_BYTES = Buffer.from([
 const TRACKED_ENV = [
   "MEDIAGEN_CLI_CONFIG_DIR",
   "XDG_CONFIG_HOME",
+  "XDG_STATE_HOME",
+  "MEDIAGEN_CLI_STATE_DIR",
   "DASHSCOPE_API_KEY",
   "ARK_API_KEY",
 ] as const;
@@ -48,6 +50,7 @@ let originalEnv: Record<string, string | undefined> = {};
 function smokeEnv(): NodeJS.ProcessEnv {
   return {
     MEDIAGEN_CLI_CONFIG_DIR: configDir,
+    MEDIAGEN_CLI_STATE_DIR: path.join(tempDir, "state"),
     DASHSCOPE_API_KEY: QWEN_KEY,
     ARK_API_KEY: ARK_KEY,
   };

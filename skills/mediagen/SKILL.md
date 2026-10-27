@@ -53,7 +53,7 @@ mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.co
 Then store keys:
 
 ```bash
-mediagen login --provider dashscope --api-key sk-...   # stored in auth.json, mode 600
+mediagen login --provider dashscope --api-key sk-...   # auth.json in ~/.local/state, mode 600
 mediagen login --provider volcengine --api-key sk-...
 mediagen auth status                                   # which key each provider would use
 ```

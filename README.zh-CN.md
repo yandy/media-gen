@@ -71,9 +71,15 @@ stdout 上每行打印一个绝对路径；`--json` 打印一个对象：
 
 ## 配置
 
-`config.toml` 和 `auth.json`（权限 `600`）位于
+`config.toml` —— 你手动编辑的那个文件 —— 位于
 `$MEDIAGEN_CLI_CONFIG_DIR`、`$XDG_CONFIG_HOME/mediagen-cli`、
 `~/.config/mediagen-cli` 三者中第一个存在的。
+
+`auth.json`（权限 `600`）属于**状态而非配置**，单独存放：取
+`$MEDIAGEN_CLI_STATE_DIR`、`$XDG_STATE_HOME/mediagen-cli`、
+`~/.local/state/mediagen-cli` 三者中第一个。`~/.config` 是人们会同步、分享、提交到
+仓库的目录，把密钥放在那里，一次 `.gitignore` 疏忽就等于泄露。state 目录按定义是
+「本机状态、不该被同步」，正合设备绑定的凭证。
 
 ```toml
 default_provider = "volcengine"

@@ -43,6 +43,8 @@ models = ["doubao-seedream-5-0-flash-260915"]
 const TRACKED_ENV = [
   "MEDIAGEN_CLI_CONFIG_DIR",
   "XDG_CONFIG_HOME",
+  "XDG_STATE_HOME",
+  "MEDIAGEN_CLI_STATE_DIR",
   "DASHSCOPE_API_KEY",
   "ARK_API_KEY",
   "MY_PROXY_KEY",
@@ -73,7 +75,9 @@ beforeEach(() => {
   fs.writeFileSync(path.join(configHome, "config.toml"), FIXTURE_CONFIG);
 
   process.env.MEDIAGEN_CLI_CONFIG_DIR = configHome;
+  process.env.MEDIAGEN_CLI_STATE_DIR = path.join(tempDir, "state");
   delete process.env.XDG_CONFIG_HOME;
+  delete process.env.XDG_STATE_HOME;
   delete process.env.DASHSCOPE_API_KEY;
   delete process.env.ARK_API_KEY;
 

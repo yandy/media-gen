@@ -15,7 +15,9 @@ import type { ProviderConfig } from "./types.js";
 
 const originalEnv = {
   MEDIAGEN_CLI_CONFIG_DIR: process.env.MEDIAGEN_CLI_CONFIG_DIR,
+  MEDIAGEN_CLI_STATE_DIR: process.env.MEDIAGEN_CLI_STATE_DIR,
   XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  XDG_STATE_HOME: process.env.XDG_STATE_HOME,
   HOME: process.env.HOME,
 };
 
@@ -67,7 +69,9 @@ function thrownBy(action: () => unknown): Error {
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-cli-auth-"));
-  process.env.MEDIAGEN_CLI_CONFIG_DIR = tempDir;
+  process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(tempDir, "config");
+  process.env.MEDIAGEN_CLI_STATE_DIR = path.join(tempDir, "state");
+  fs.mkdirSync(path.join(tempDir, "state"), { recursive: true });
 });
 
 afterEach(() => {
@@ -82,8 +86,35 @@ afterEach(() => {
 });
 
 describe("authPath", () => {
-  it("lives next to config.toml", () => {
-    expect(authPath()).toBe(path.join(tempDir, "auth.json"));
+  it("lives in the state directory, never next to the editable config", () => {
+    expect(authPath()).toBe(path.join(tempDir, "state", "auth.json"));
+    expect(authPath()).not.toContain(path.join(tempDir, "config"));
+  });
+
+  it("honors MEDIAGEN_CLI_STATE_DIR", () => {
+    const state = path.join(tempDir, "elsewhere");
+    process.env.MEDIAGEN_CLI_STATE_DIR = state;
+
+    expect(authPath()).toBe(path.join(state, "auth.json"));
+  });
+
+  it("falls back to XDG_STATE_HOME", () => {
+    delete process.env.MEDIAGEN_CLI_STATE_DIR;
+    const xdgState = path.join(tempDir, "xdg-state");
+    process.env.XDG_STATE_HOME = xdgState;
+
+    expect(authPath()).toBe(path.join(xdgState, "mediagen-cli", "auth.json"));
+  });
+
+  it("falls back to ~/.local/state", () => {
+    delete process.env.MEDIAGEN_CLI_STATE_DIR;
+    delete process.env.XDG_STATE_HOME;
+    const home = path.join(tempDir, "home");
+    process.env.HOME = home;
+
+    expect(authPath()).toBe(
+      path.join(home, ".local", "state", "mediagen-cli", "auth.json"),
+    );
   });
 });
 
@@ -172,9 +203,9 @@ describe("saveApiKey", () => {
     expect(loadAuth().providers.qwen).toEqual({ api_key: "sk-qwen-1234" });
   });
 
-  it("creates the config dir with mode 0700", () => {
-    const nested = path.join(tempDir, "nested", "cfg");
-    process.env.MEDIAGEN_CLI_CONFIG_DIR = nested;
+  it("creates the state dir with mode 0700 and the key file with 0600", () => {
+    const nested = path.join(tempDir, "nested", "state");
+    process.env.MEDIAGEN_CLI_STATE_DIR = nested;
 
     saveApiKey("qwen", "sk-qwen-1234");
 
@@ -202,7 +233,7 @@ describe("saveApiKey", () => {
   it("leaves no temporary files behind", () => {
     saveApiKey("qwen", "sk-qwen-1234");
 
-    expect(fs.readdirSync(tempDir)).toEqual(["auth.json"]);
+    expect(fs.readdirSync(path.dirname(authPath()))).toEqual(["auth.json"]);
   });
 });
 
