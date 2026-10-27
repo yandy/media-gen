@@ -14,12 +14,11 @@ import {
   saveApiKey,
   type ApiKeySource,
 } from "./auth.js";
-import { configPath, loadConfig, type MediagenConfig } from "./config.js";
+import { configPath, loadConfig, type MediagenConfig, type ProviderOverride } from "./config.js";
 import { UsageError } from "./errors.js";
 import { runGenerate, type GenerateOptions } from "./generate.js";
 import { renderError, renderHuman, renderJson, type RenderedOutput } from "./output.js";
-import { BUILTIN_PROVIDERS, DIALECT_DEFAULT_PATHS } from "./providers.js";
-import type { Dialect, ProviderConfig } from "./types.js";
+import { DIALECT_DEFAULT_PATHS } from "./providers.js";
 
 /**
  * Everything the CLI needs from the outside world that tests must be able to
@@ -39,7 +38,7 @@ export interface ProgramOptions {
 }
 
 /** Where a configuration value came from, for `config show`. */
-type ValueSource = "built-in" | "config.toml" | "default";
+type ValueSource = "config.toml" | "default";
 
 interface ConfiguredValue {
   value: string;
@@ -54,7 +53,6 @@ interface KeyStatus {
 
 interface ProviderView {
   name: string;
-  custom: boolean;
   api_type?: ConfiguredValue;
   base_url?: ConfiguredValue;
   model?: ConfiguredValue;
@@ -557,7 +555,7 @@ function runBaseUrlOnlyLogin(
 
 /** How provider `name` gets its key now that login stored none. */
 function keyRouteHint(name: string, config: MediagenConfig): string {
-  const keyEnv = envVarFor(buildProbe(name, config.providers[name]));
+  const keyEnv = config.providers[name]?.api_key_env;
   const route =
     keyEnv === undefined
       ? `declare api_key_env under [providers.${tomlKey(name)}] in ${configPath()} and set that variable`
@@ -566,15 +564,16 @@ function keyRouteHint(name: string, config: MediagenConfig): string {
 }
 
 /**
- * login stores keys and base_url overrides but never creates a provider: a
- * provider definition (api_type/base_url/model) lives in config.toml, so an
- * unknown name is a usage error that points at the file.
+ * login stores keys but never creates a provider: a provider definition
+ * (api_type/base_url/model) lives in config.toml, so an unknown name is a usage
+ * error that points at the two ways to create one.
  */
 function assertKnownProvider(name: string, config: MediagenConfig): void {
-  if (Object.hasOwn(BUILTIN_PROVIDERS, name) || Object.hasOwn(config.providers, name)) return;
+  if (Object.hasOwn(config.providers, name)) return;
   throw new UsageError(
     `unknown provider "${name}": login stores API keys but never creates providers; ` +
-      `add a [providers.${name}] table to ${configPath()} first`,
+      `add a [providers.${name}] table to ${configPath()} first ` +
+      `(or run "mediagen config add ${name} ...")`,
   );
 }
 
@@ -656,19 +655,20 @@ function runAuthStatus(flags: { json?: boolean }): void {
   const entries: (KeyStatus & { name: string })[] = [];
   const details: string[] = [];
 
-  for (const provider of providerProbes(config)) {
-    const resolved = resolveApiKey(provider, undefined, process.env);
+  for (const [name, override] of Object.entries(config.providers)) {
+    const apiKeyEnv = override.api_key_env;
+    const resolved = resolveApiKey({ name, api_key_env: apiKeyEnv }, undefined, process.env);
 
     const entry: KeyStatus & { name: string } = {
-      name: provider.name,
+      name,
       configured: resolved !== null,
       source: resolved?.source ?? "none",
     };
     if (resolved !== null) {
       entry.masked_key = maskKey(resolved.key);
-      details.push(`${entry.masked_key} (${describeKeySource(provider, resolved.source)})`);
+      details.push(`${entry.masked_key} (${describeKeySource(apiKeyEnv, resolved.source)})`);
     } else {
-      details.push(`not configured (${missingKeyHint(provider)})`);
+      details.push(`not configured (${missingKeyHint(name, apiKeyEnv)})`);
     }
     entries.push(entry);
   }
@@ -685,52 +685,19 @@ function runAuthStatus(flags: { json?: boolean }): void {
 }
 
 /**
- * resolveApiKey() only reads `name` and `api_key_env`, so a probe can stand in
- * for a provider whose config.toml entry is incomplete: `auth status` and
- * `config show` must report such a provider instead of failing.
+ * `auth.json` is keyed by provider name, and `resolveApiKey()` needs nothing but
+ * that name and the entry's own `api_key_env`. An incomplete config.toml entry
+ * can therefore still be reported instead of failing the whole command.
  */
-function providerProbes(config: MediagenConfig): ProviderConfig[] {
-  const names = [
-    ...Object.keys(BUILTIN_PROVIDERS),
-    ...Object.keys(config.providers).filter((name) => !Object.hasOwn(BUILTIN_PROVIDERS, name)),
-  ];
-  return names.map((name) => buildProbe(name, config.providers[name]));
-}
-
-function buildProbe(name: string, override?: Partial<ProviderConfig>): ProviderConfig {
-  const builtin = Object.hasOwn(BUILTIN_PROVIDERS, name) ? BUILTIN_PROVIDERS[name] : undefined;
-  const probe: ProviderConfig = {
-    name,
-    api_type: (override?.api_type ?? builtin?.api_type ?? "qwen") as Dialect,
-    base_url: override?.base_url ?? builtin?.base_url ?? "",
-    model: override?.model ?? builtin?.model ?? "",
-    path: override?.path ?? builtin?.path ?? "",
-    custom: builtin === undefined,
-  };
-
-  const keyEnv = override?.api_key_env ?? builtin?.api_key_env;
-  if (keyEnv !== undefined) probe.api_key_env = keyEnv;
-  return probe;
-}
-
-function envVarFor(provider: ProviderConfig): string | undefined {
-  if (provider.api_key_env !== undefined) return provider.api_key_env;
-  const builtin = Object.hasOwn(BUILTIN_PROVIDERS, provider.name)
-    ? BUILTIN_PROVIDERS[provider.name]
-    : undefined;
-  return builtin?.api_key_env;
-}
-
-function describeKeySource(provider: ProviderConfig, source: ApiKeySource): string {
+function describeKeySource(apiKeyEnv: string | undefined, source: ApiKeySource): string {
   if (source === "flag") return "--api-key";
-  if (source === "env") return `env ${envVarFor(provider) ?? "environment variable"}`;
+  if (source === "env") return `env ${apiKeyEnv ?? "environment variable"}`;
   return `auth.json: ${authPath()}`;
 }
 
-function missingKeyHint(provider: ProviderConfig): string {
-  const hints = [`run "mediagen login --provider ${provider.name}"`];
-  const keyEnv = envVarFor(provider);
-  if (keyEnv !== undefined) hints.push(`set ${keyEnv}`);
+function missingKeyHint(name: string, apiKeyEnv: string | undefined): string {
+  const hints = [`run "mediagen login --provider ${name}"`];
+  if (apiKeyEnv !== undefined) hints.push(`set ${apiKeyEnv}`);
   hints.push("pass --api-key");
   return hints.join(", ");
 }
@@ -750,11 +717,15 @@ function runConfigShow(flags: { json?: boolean }): void {
   // loadConfig() above already validated the file, so this parse cannot fail.
   const declared: TomlTable = exists ? parseToml(fs.readFileSync(file, "utf8")) : {};
 
-  const defaultProvider = configuredValue(config.default_provider, declared.default_provider);
+  const defaultProvider = configuredValue(
+    config.default_provider,
+    declared.default_provider,
+  );
   const outputDir = configuredValue(config.output_dir, declared.output_dir);
-  const views = providerProbes(config).map((probe) => ({
-    probe,
-    view: buildProviderView(probe, config),
+  const views = Object.entries(config.providers).map(([name, override]) => ({
+    name,
+    apiKeyEnv: override.api_key_env,
+    view: buildProviderView(name, override),
   }));
 
   if (flags.json === true) {
@@ -770,8 +741,10 @@ function runConfigShow(flags: { json?: boolean }): void {
   }
 
   const lines = [
-    `config file: ${file} (${exists ? "loaded" : "not found; using built-in defaults"})`,
-    `default_provider: ${show(defaultProvider)}`,
+    `config file: ${file} (${exists ? "loaded" : "could not be created"})`,
+    `default_provider: ${
+      defaultProvider.value === "" ? `(not set) (${defaultProvider.source})` : show(defaultProvider)
+    }`,
     `output_dir: ${outputDir.value} (${
       outputDir.source === "default" ? "default: current directory" : outputDir.source
     })`,
@@ -779,12 +752,14 @@ function runConfigShow(flags: { json?: boolean }): void {
     "providers:",
   ];
 
-  for (const { probe, view } of views) {
+  if (views.length === 0) {
     lines.push(
-      `  ${view.name} (${view.custom ? "custom" : "built-in"}, dialect ${
-        view.api_type?.value ?? "unknown"
-      })`,
+      "  (none; run \"mediagen config add <name> --api-type <qwen|ark> --base-url <url> --model <id>\")",
     );
+  }
+
+  for (const { name, apiKeyEnv, view } of views) {
+    lines.push(`  ${view.name} (dialect ${view.api_type?.value ?? "unknown"})`);
     for (const field of ["api_type", "base_url", "model", "path", "api_key_env"] as const) {
       const value = view[field];
       if (value !== undefined) lines.push(`    ${field}: ${show(value)}`);
@@ -794,8 +769,8 @@ function runConfigShow(flags: { json?: boolean }): void {
     }
     lines.push(
       view.api_key.configured && view.api_key.source !== "none"
-        ? `    api_key: ${view.api_key.masked_key} (${describeKeySource(probe, view.api_key.source)})`
-        : `    api_key: not set (${missingKeyHint(probe)})`,
+        ? `    api_key: ${view.api_key.masked_key} (${describeKeySource(apiKeyEnv, view.api_key.source)})`
+        : `    api_key: not set (${missingKeyHint(name, apiKeyEnv)})`,
     );
   }
 
@@ -811,20 +786,12 @@ function configuredValue(value: string, declared: unknown): ConfiguredValue {
   return declared === undefined ? { value, source: "default" } : { value, source: "config.toml" };
 }
 
-function buildProviderView(probe: ProviderConfig, config: MediagenConfig): ProviderView {
-  const override: Partial<ProviderConfig> | undefined = config.providers[probe.name];
-  const builtin = Object.hasOwn(BUILTIN_PROVIDERS, probe.name)
-    ? BUILTIN_PROVIDERS[probe.name]
-    : undefined;
-
+function buildProviderView(name: string, entry: ProviderOverride): ProviderView {
   const field = (
     key: "api_type" | "base_url" | "model" | "path" | "api_key_env",
   ): ConfiguredValue | undefined => {
-    const fromConfig = override?.[key];
-    if (fromConfig !== undefined) return { value: fromConfig, source: "config.toml" };
-    const fromBuiltin = builtin?.[key];
-    if (fromBuiltin !== undefined) return { value: fromBuiltin, source: "built-in" };
-    return undefined;
+    const value = entry[key];
+    return value === undefined ? undefined : { value, source: "config.toml" };
   };
 
   const missing: string[] = [];
@@ -835,9 +802,9 @@ function buildProviderView(probe: ProviderConfig, config: MediagenConfig): Provi
   for (const key of ["api_type", "base_url", "model", "path", "api_key_env"] as const) {
     const value = field(key);
     if (value === undefined) {
-      // api_key_env and path are optional everywhere; the rest are required for
-      // a custom provider, which is what resolveProvider() will complain about.
-      if (key !== "api_key_env" && key !== "path" && builtin === undefined) missing.push(key);
+      // api_key_env and path are optional everywhere; the rest are required, and
+      // missing them is exactly what resolveProvider() will complain about.
+      if (key !== "api_key_env" && key !== "path") missing.push(key);
       continue;
     }
     fields[key] = value;
@@ -851,17 +818,16 @@ function buildProviderView(probe: ProviderConfig, config: MediagenConfig): Provi
   }
 
   const view: ProviderView = {
-    name: probe.name,
-    custom: builtin === undefined,
+    name,
     ...fields,
-    api_key: keyStatus(probe),
+    api_key: keyStatus(name, entry.api_key_env),
   };
   if (missing.length > 0) view.missing = missing;
   return view;
 }
 
-function keyStatus(probe: ProviderConfig): KeyStatus {
-  const resolved = resolveApiKey(probe, undefined, process.env);
+function keyStatus(name: string, apiKeyEnv: string | undefined): KeyStatus {
+  const resolved = resolveApiKey({ name, api_key_env: apiKeyEnv }, undefined, process.env);
   if (resolved === null) return { configured: false, source: "none" };
   return { configured: true, source: resolved.source, masked_key: maskKey(resolved.key) };
 }

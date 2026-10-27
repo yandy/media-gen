@@ -291,12 +291,11 @@ describe("mediagen config show", () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain(configPath());
-    expect(result.stdout).toMatch(/default_provider:\s+qwen \(default\)/);
+    expect(result.stdout).toMatch(/default_provider:\s+dashscope \(config\.toml\)/);
     expect(result.stdout).toMatch(/output_dir:\s+\S+ \(default/);
-    expect(result.stdout).toContain("https://dashscope.aliyuncs.com (built-in)");
-    expect(result.stdout).toContain("qwen-image-3.0 (built-in)");
-    expect(result.stdout).toContain("https://ark.cn-beijing.volces.com (built-in)");
-    expect(result.stdout).toContain("/api/v3/images/generations (built-in)");
+    expect(result.stdout).toContain("https://dashscope.aliyuncs.com (config.toml)");
+    expect(result.stdout).toContain("https://ark.cn-beijing.volces.com (config.toml)");
+    expect(result.stdout).toContain("/compatible-mode/v1/images/generations (default)");
     expect(result.stdout).toMatch(/not set/);
   });
 
@@ -311,13 +310,15 @@ describe("mediagen config show", () => {
     expect(result.stdout).toMatch(/env DASHSCOPE_API_KEY/);
   });
 
-  it("marks values that come from config.toml and lists custom providers", async () => {
+  it("marks values that come from config.toml", async () => {
     writeConfig(`
 # a comment that must survive
-default_provider = "ark"
+default_provider = "volcengine"
 output_dir = "./shots"
 
-[providers.ark]
+[providers.volcengine]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com"
 model = "doubao-seedream-5-0-pro-260628"
 
 [providers.my-proxy]
@@ -330,32 +331,33 @@ api_key_env = "MY_PROXY_KEY"
     const result = await run(["config", "show"]);
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toMatch(/default_provider:\s+ark \(config\.toml\)/);
+    expect(result.stdout).toMatch(/default_provider:\s+volcengine \(config\.toml\)/);
     expect(result.stdout).toMatch(/output_dir:\s+\.\/shots \(config\.toml\)/);
     expect(result.stdout).toContain("doubao-seedream-5-0-pro-260628 (config.toml)");
     expect(result.stdout).toContain("my-proxy");
     expect(result.stdout).toContain("https://proxy.example.com (config.toml)");
-    expect(result.stdout).toMatch(/custom/);
   });
 
   it("emits the resolved config as JSON with masked keys", async () => {
     process.env.ARK_API_KEY = API_KEY;
-    writeConfig('[providers.qwen]\nmodel = "my-qwen"\n');
+    writeConfig(
+      '[providers.dashscope]\napi_type = "qwen"\nbase_url = "https://x"\nmodel = "my-qwen"\napi_key_env = "DASHSCOPE_API_KEY"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com"\nmodel = "m"\napi_key_env = "ARK_API_KEY"\n',
+    );
 
     const result = await run(["config", "show", "--json"]);
 
     expect(result.code).toBe(0);
     const payload = JSON.parse(result.stdout) as Record<string, unknown>;
     expect(payload.config_file).toEqual({ path: configPath(), exists: true });
-    expect(payload.default_provider).toEqual({ value: "qwen", source: "default" });
+    expect(payload.default_provider).toEqual({ value: "", source: "default" });
 
     const providers = payload.providers as Record<string, unknown>[];
-    const qwen = providers.find((entry) => entry.name === "qwen");
-    expect(qwen?.model).toEqual({ value: "my-qwen", source: "config.toml" });
-    expect(qwen?.api_key).toEqual({ configured: false, source: "none" });
+    const dashscope = providers.find((entry) => entry.name === "dashscope");
+    expect(dashscope?.model).toEqual({ value: "my-qwen", source: "config.toml" });
+    expect(dashscope?.api_key).toEqual({ configured: false, source: "none" });
 
-    const ark = providers.find((entry) => entry.name === "ark");
-    expect(ark?.api_key).toEqual({
+    const volcengine = providers.find((entry) => entry.name === "volcengine");
+    expect(volcengine?.api_key).toEqual({
       configured: true,
       source: "env",
       masked_key: MASKED_KEY,
@@ -380,8 +382,8 @@ describe("mediagen auth status", () => {
     const result = await run(["auth", "status"]);
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("qwen");
-    expect(result.stdout).toContain("ark");
+    expect(result.stdout).toContain("dashscope");
+    expect(result.stdout).toContain("volcengine");
     expect(result.stdout).toMatch(/not configured|no API key/i);
     expect(result.stdout).toContain("mediagen login");
   });
@@ -392,14 +394,14 @@ describe("mediagen auth status", () => {
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
       providers: [
-        { name: "qwen", configured: false, source: "none" },
-        { name: "ark", configured: false, source: "none" },
+        { name: "dashscope", configured: false, source: "none" },
+        { name: "volcengine", configured: false, source: "none" },
       ],
     });
   });
 
   it("reports the masked key and its source after login", async () => {
-    expect((await run(["login", "--provider", "qwen", "--api-key", API_KEY])).code).toBe(0);
+    expect((await run(["login", "--provider", "dashscope", "--api-key", API_KEY])).code).toBe(0);
     process.env.ARK_API_KEY = API_KEY;
 
     const human = await run(["auth", "status"]);
@@ -412,8 +414,8 @@ describe("mediagen auth status", () => {
     const json = await run(["auth", "status", "--json"]);
     expect(JSON.parse(json.stdout)).toEqual({
       providers: [
-        { name: "qwen", configured: true, source: "auth", masked_key: MASKED_KEY },
-        { name: "ark", configured: true, source: "env", masked_key: MASKED_KEY },
+        { name: "dashscope", configured: true, source: "auth", masked_key: MASKED_KEY },
+        { name: "volcengine", configured: true, source: "env", masked_key: MASKED_KEY },
       ],
     });
     expect(json.stdout).not.toContain(API_KEY);
@@ -437,31 +439,33 @@ describe("mediagen auth status", () => {
 
 describe("mediagen login", () => {
   it("stores the key with --api-key and prints only the masked key", async () => {
-    const result = await run(["login", "--provider", "qwen", "--api-key", API_KEY]);
+    const result = await run(["login", "--provider", "dashscope", "--api-key", API_KEY]);
 
     expect(result.code).toBe(0);
-    expect(loadAuth().providers.qwen?.api_key).toBe(API_KEY);
+    expect(loadAuth().providers.dashscope?.api_key).toBe(API_KEY);
     expect(result.stdout).toContain(MASKED_KEY);
     expect(result.stdout).toContain(authPath());
     expect(`${result.stdout}${result.stderr}`).not.toContain(API_KEY);
   });
 
   it("defaults the provider to config.default_provider", async () => {
-    writeConfig('default_provider = "ark"\n');
+    writeConfig(
+      'default_provider = "volcengine"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com"\nmodel = "m"\n',
+    );
 
     const result = await run(["login", "--api-key", API_KEY]);
 
     expect(result.code).toBe(0);
-    expect(loadAuth().providers.ark?.api_key).toBe(API_KEY);
+    expect(loadAuth().providers.volcengine?.api_key).toBe(API_KEY);
   });
 
   it("emits JSON with --json", async () => {
-    const result = await run(["login", "--provider", "ark", "--api-key", API_KEY, "--json"]);
+    const result = await run(["login", "--provider", "volcengine", "--api-key", API_KEY, "--json"]);
 
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
       ok: true,
-      provider: "ark",
+      provider: "volcengine",
       masked_key: MASKED_KEY,
       auth_file: authPath(),
     });
@@ -471,32 +475,32 @@ describe("mediagen login", () => {
   it("reads the key without echoing it when stdin is a TTY", async () => {
     const readSecret = vi.fn(async () => API_KEY);
 
-    const result = await run(["login", "--provider", "qwen"], {
+    const result = await run(["login", "--provider", "dashscope"], {
       isTTY: () => true,
       readSecret,
     });
 
     expect(result.code).toBe(0);
     expect(readSecret).toHaveBeenCalledOnce();
-    expect(loadAuth().providers.qwen?.api_key).toBe(API_KEY);
+    expect(loadAuth().providers.dashscope?.api_key).toBe(API_KEY);
     expect(`${result.stdout}${result.stderr}`).not.toContain(API_KEY);
   });
 
   it("prefers --api-key over the interactive prompt", async () => {
     const readSecret = vi.fn(async () => "sk-should-not-be-used");
 
-    const result = await run(["login", "--provider", "qwen", "--api-key", API_KEY], {
+    const result = await run(["login", "--provider", "dashscope", "--api-key", API_KEY], {
       isTTY: () => true,
       readSecret,
     });
 
     expect(result.code).toBe(0);
     expect(readSecret).not.toHaveBeenCalled();
-    expect(loadAuth().providers.qwen?.api_key).toBe(API_KEY);
+    expect(loadAuth().providers.dashscope?.api_key).toBe(API_KEY);
   });
 
   it("fails with a usage error when there is no TTY and no --api-key", async () => {
-    const result = await run(["login", "--provider", "qwen"], { isTTY: () => false });
+    const result = await run(["login", "--provider", "dashscope"], { isTTY: () => false });
 
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("--api-key");
@@ -504,7 +508,7 @@ describe("mediagen login", () => {
   });
 
   it("rejects an empty key read from the terminal", async () => {
-    const result = await run(["login", "--provider", "qwen"], {
+    const result = await run(["login", "--provider", "dashscope"], {
       isTTY: () => true,
       readSecret: async () => "   ",
     });
@@ -535,269 +539,37 @@ describe("mediagen login", () => {
     expect(loadAuth().providers["my-proxy"]?.api_key).toBe(API_KEY);
   });
 
-  it("--base-url adds an override for a built-in provider", async () => {
-    const result = await run([
-      "login",
-      "--provider", "qwen",
-      "--api-key", API_KEY,
-      "--base-url", "https://proxy.example.com",
-    ]);
-
-    expect(result.code).toBe(0);
-    expect(readConfig()).toContain("[providers.qwen]");
-    expect(readConfig()).toContain('base_url = "https://proxy.example.com"');
-    expect(result.stdout).toContain("https://proxy.example.com");
-    expect(loadAuth().providers.qwen?.api_key).toBe(API_KEY);
-  });
-
-  it("--base-url preserves comments and every other setting", async () => {
-    writeConfig(`# keep me
-default_provider = "ark"
-output_dir = "./shots"
-
-[providers.ark]
-model = "doubao-seedream-5-0-pro-260628"  # trailing comment
-
-[providers.my-proxy]
-api_type = "ark"
-base_url = "https://proxy.example.com"
-model = "some-model"
-api_key_env = "MY_PROXY_KEY"
-`);
-
-    const result = await run([
-      "login",
-      "--provider", "ark",
-      "--api-key", API_KEY,
-      "--base-url", "https://relay.example.com",
-    ]);
-
-    expect(result.code).toBe(0);
-    const toml = readConfig();
-    expect(toml).toContain("# keep me");
-    expect(toml).toContain('default_provider = "ark"');
-    expect(toml).toContain('output_dir = "./shots"');
-    expect(toml).toContain('model = "doubao-seedream-5-0-pro-260628"  # trailing comment');
-    expect(toml).toContain('base_url = "https://relay.example.com"');
-    expect(toml).toContain('api_key_env = "MY_PROXY_KEY"');
-    expect(toml).toContain('base_url = "https://proxy.example.com"');
-    expect(toml).not.toContain("https://ark.cn-beijing.volces.com");
-    expect(loadAuth().providers.ark?.api_key).toBe(API_KEY);
-  });
-
-  it("--base-url replaces an existing override in place", async () => {
-    writeConfig('[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://old.example.com"\nmodel = "m"\n');
-
-    const result = await run([
-      "login",
-      "--provider", "my-proxy",
-      "--api-key", API_KEY,
-      "--base-url", "https://new.example.com",
-    ]);
-
-    expect(result.code).toBe(0);
-    expect(readConfig()).toContain('base_url = "https://new.example.com"');
-    expect(readConfig()).not.toContain("old.example.com");
-    expect(readConfig().match(/\[providers\.my-proxy\]/g)).toHaveLength(1);
-  });
-
-  it("--base-url without --api-key rewrites config.toml and creates no auth.json", async () => {
-    const result = await run(
-      ["login", "--provider", "qwen", "--base-url", "https://proxy.example.com"],
-      { isTTY: () => false },
-    );
-
-    expect(result.code).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(readConfig()).toContain("[providers.qwen]");
-    expect(readConfig()).toContain('base_url = "https://proxy.example.com"');
-    // A pure endpoint override must not touch any credential file.
-    expect(fs.existsSync(authPath())).toBe(false);
-    expect(fs.existsSync(path.join(configHome, "auth.json"))).toBe(false);
-  });
-
-  it("--base-url without --api-key never reads a key, even on a TTY", async () => {
-    const readSecret = vi.fn(async () => API_KEY);
-
-    const result = await run(
-      ["login", "--provider", "qwen", "--base-url", "https://proxy.example.com"],
-      { isTTY: () => true, readSecret },
-    );
-
-    expect(result.code).toBe(0);
-    expect(readSecret).not.toHaveBeenCalled();
-    expect(fs.existsSync(authPath())).toBe(false);
-    expect(readConfig()).toContain('base_url = "https://proxy.example.com"');
-  });
-
-  it("--base-url without --api-key says no key was stored and names the env var route", async () => {
-    const result = await run(["login", "--provider", "qwen", "--base-url", "https://proxy.example.com"]);
-
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain(configPath());
-    expect(result.stdout).toContain("https://proxy.example.com");
-    expect(result.stdout).toMatch(/no API key was stored/i);
-    expect(result.stdout).toContain("DASHSCOPE_API_KEY");
-  });
-
-  it("--base-url without --api-key names api_key_env for a custom provider", async () => {
-    writeConfig(
-      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://old.example.com"\nmodel = "m"\napi_key_env = "MY_PROXY_KEY"\n',
-    );
-
-    const result = await run([
-      "login",
-      "--provider", "my-proxy",
-      "--base-url", "https://relay.example.com",
-    ]);
-
-    expect(result.code).toBe(0);
-    expect(result.stdout).toMatch(/no API key was stored/i);
-    expect(result.stdout).toContain("MY_PROXY_KEY");
-    expect(readConfig()).toContain('base_url = "https://relay.example.com"');
-    expect(readConfig()).not.toContain("old.example.com");
-    expect(fs.existsSync(authPath())).toBe(false);
-  });
-
-  it("--api-key with --base-url stores the key and records the override as JSON", async () => {
-    const result = await run([
-      "login",
-      "--provider", "qwen",
-      "--api-key", API_KEY,
-      "--base-url", "https://proxy.example.com",
-      "--json",
-    ]);
-
-    expect(result.code).toBe(0);
-    expect(loadAuth().providers.qwen?.api_key).toBe(API_KEY);
-    expect(readConfig()).toContain('base_url = "https://proxy.example.com"');
-    expect(JSON.parse(result.stdout)).toEqual({
-      ok: true,
-      provider: "qwen",
-      masked_key: MASKED_KEY,
-      auth_file: authPath(),
-      base_url: "https://proxy.example.com",
-      config_file: configPath(),
-    });
-    expect(result.stdout).not.toContain(API_KEY);
-  });
-
-  it("--base-url without --api-key reports api_key_stored false as JSON", async () => {
-    const result = await run([
-      "login",
-      "--provider", "qwen",
-      "--base-url", "https://proxy.example.com",
-      "--json",
-    ]);
-
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({
-      ok: true,
-      provider: "qwen",
-      base_url: "https://proxy.example.com",
-      config_file: configPath(),
-      api_key_stored: false,
-    });
-    expect(fs.existsSync(authPath())).toBe(false);
-  });
-
-  it("rejects a --base-url that is not an http(s) URL", async () => {
-    const result = await run(["login", "--provider", "qwen", "--base-url", "proxy.example.com"]);
-
-    expect(result.code).toBe(2);
-    expect(result.stderr).toContain("--base-url");
-    expect(fs.existsSync(path.join(configHome, "config.toml"))).toBe(false);
-  });
-
-  it("rewrites base_url in a config.toml that carries datetimes", async () => {
-    writeConfig(
-      [
-        "odt = 1979-05-27T07:32:00Z",
-        "ldt = 1979-05-27T07:32:00",
-        "ld = 1979-05-27",
-        "lt = 07:32:00",
-        "arr = [1979-05-27T07:32:00Z, 1980-01-01]",
-        "",
-        "[providers.qwen]",
-        'base_url = "https://old.example.com"',
-        "rotated = 2026-10-24T00:00:00Z",
-        "",
-      ].join("\n"),
-    );
-
-    const result = await run([
-      "login",
-      "--provider", "qwen",
-      "--base-url", "https://ws.cn-beijing.maas.aliyuncs.com",
-    ]);
-
-    expect(result.code).toBe(0);
-    expect(result.stderr).not.toContain("by hand");
-    const rewritten = readConfig();
-    expect(rewritten).toContain('base_url = "https://ws.cn-beijing.maas.aliyuncs.com"');
-    expect(rewritten).not.toContain("old.example.com");
-    // Every datetime survives verbatim, so the faithfulness check must accept it.
-    for (const line of [
-      "odt = 1979-05-27T07:32:00Z",
-      "ldt = 1979-05-27T07:32:00",
-      "ld = 1979-05-27",
-      "lt = 07:32:00",
-      "arr = [1979-05-27T07:32:00Z, 1980-01-01]",
-      "rotated = 2026-10-24T00:00:00Z",
-    ]) {
-      expect(rewritten).toContain(line);
-    }
-  });
-
-  it("refuses to rewrite a config.toml it cannot edit faithfully", async () => {
-    // Dotted keys define providers.qwen without a [providers.qwen] header, so
-    // appending a header would produce a document that no longer parses.
-    writeConfig('providers.qwen.model = "my-qwen"\n');
-
-    const result = await run([
-      "login",
-      "--provider", "qwen",
-      "--api-key", API_KEY,
-      "--base-url", "https://proxy.example.com",
-    ]);
-
-    expect(result.code).toBe(2);
-    expect(result.stderr).toContain("by hand");
-    expect(result.stderr).toContain("base_url");
-    expect(readConfig()).toBe('providers.qwen.model = "my-qwen"\n');
-    // The config rewrite runs first, so a refused rewrite stores no key.
-    expect(fs.existsSync(authPath())).toBe(false);
-    expect(result.stderr).not.toContain(API_KEY);
-  });
 });
 
 describe("mediagen logout", () => {
   it("removes the stored key", async () => {
-    await run(["login", "--provider", "qwen", "--api-key", API_KEY]);
+    await run(["login", "--provider", "dashscope", "--api-key", API_KEY]);
 
-    const result = await run(["logout", "--provider", "qwen"]);
+    const result = await run(["logout", "--provider", "dashscope"]);
 
     expect(result.code).toBe(0);
-    expect(loadAuth().providers.qwen).toBeUndefined();
-    expect(result.stdout).toContain("qwen");
+    expect(loadAuth().providers.dashscope).toBeUndefined();
+    expect(result.stdout).toContain("dashscope");
     expect(`${result.stdout}${result.stderr}`).not.toContain(API_KEY);
   });
 
   it("is a no-op that still exits 0 when nothing is stored", async () => {
-    const result = await run(["logout", "--provider", "qwen", "--json"]);
+    const result = await run(["logout", "--provider", "dashscope", "--json"]);
 
     expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ ok: true, provider: "qwen", removed: false });
+    expect(JSON.parse(result.stdout)).toEqual({ ok: true, provider: "dashscope", removed: false });
   });
 
   it("defaults the provider to config.default_provider", async () => {
-    writeConfig('default_provider = "ark"\n');
-    await run(["login", "--provider", "ark", "--api-key", API_KEY]);
+    writeConfig(
+      'default_provider = "volcengine"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com"\nmodel = "m"\n',
+    );
+    await run(["login", "--provider", "volcengine", "--api-key", API_KEY]);
 
     const result = await run(["logout"]);
 
     expect(result.code).toBe(0);
-    expect(loadAuth().providers.ark).toBeUndefined();
+    expect(loadAuth().providers.volcengine).toBeUndefined();
   });
 });
 
@@ -809,7 +581,7 @@ describe("mediagen image generate", () => {
 
     const result = await run([
       "image", "generate", "a red fox",
-      "--provider", "qwen",
+      "--provider", "dashscope",
       "--api-key", API_KEY,
       "--model", "qwen-image-3.0",
       "--size", "1024x1024",
@@ -861,7 +633,7 @@ describe("mediagen image generate", () => {
 
     const result = await run([
       "image", "generate", "a logo",
-      "--provider", "ark",
+      "--provider", "volcengine",
       "--api-key", API_KEY,
       "--size", "2K",
       "--n", "3",
@@ -897,7 +669,7 @@ describe("mediagen image generate", () => {
 
     const result = await run([
       "image", "generate", "x",
-      "--provider", "qwen",
+      "--provider", "dashscope",
       "--api-key", API_KEY,
       "--base-url", "https://proxy.example.com/",
       "--out-dir", outDir,
@@ -912,7 +684,7 @@ describe("mediagen image generate", () => {
 
     const result = await run([
       "image", "generate", "x",
-      "--provider", "qwen",
+      "--provider", "dashscope",
       "--api-key", API_KEY,
       "--out-dir", outDir,
       "--json",
@@ -938,7 +710,7 @@ describe("mediagen image generate", () => {
 
     const result = await run([
       "image", "generate", "x",
-      "--provider", "qwen",
+      "--provider", "dashscope",
       "--api-key", API_KEY,
       "--n", "2",
       "--out-dir", outDir,
@@ -953,7 +725,7 @@ describe("mediagen image generate", () => {
   it("exits 2 when --layer-decomposition is used with a qwen provider", async () => {
     const result = await run([
       "image", "generate", "x",
-      "--provider", "qwen",
+      "--provider", "dashscope",
       "--api-key", API_KEY,
       "--layer-decomposition", "true",
       "--out-dir", outDir,
@@ -968,7 +740,7 @@ describe("mediagen image generate", () => {
   it("exits 2 when --layer-decomposition is rejected by a qwen provider in JSON mode", async () => {
     const result = await run([
       "image", "generate", "x",
-      "--provider", "qwen",
+      "--provider", "dashscope",
       "--api-key", API_KEY,
       "--layer-decomposition", "true",
       "--json",
@@ -981,7 +753,7 @@ describe("mediagen image generate", () => {
   });
 
   it("exits 1 with a login hint when no API key can be resolved", async () => {
-    const result = await run(["image", "generate", "x", "--provider", "qwen", "--out-dir", outDir]);
+    const result = await run(["image", "generate", "x", "--provider", "dashscope", "--out-dir", outDir]);
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("mediagen login");
@@ -992,7 +764,7 @@ describe("mediagen image generate", () => {
   it("exits 2 for an invalid --size", async () => {
     const result = await run([
       "image", "generate", "x",
-      "--provider", "qwen",
+      "--provider", "dashscope",
       "--api-key", API_KEY,
       "--size", "banana",
     ]);
@@ -1004,7 +776,7 @@ describe("mediagen image generate", () => {
   it("exits 2 for a non-integer --n", async () => {
     const result = await run([
       "image", "generate", "x",
-      "--provider", "qwen",
+      "--provider", "dashscope",
       "--api-key", API_KEY,
       "--n", "many",
     ]);
@@ -1018,7 +790,7 @@ describe("mediagen image generate", () => {
     async (value) => {
       const result = await run([
         "image", "generate", "x",
-        "--provider", "qwen",
+        "--provider", "dashscope",
         "--api-key", API_KEY,
         "--n", value,
       ]);
@@ -1031,7 +803,7 @@ describe("mediagen image generate", () => {
   it("names the 1-6 limit for an --n above it", async () => {
     const result = await run([
       "image", "generate", "x",
-      "--provider", "ark",
+      "--provider", "volcengine",
       "--api-key", API_KEY,
       "--n", "500",
     ]);
@@ -1044,7 +816,7 @@ describe("mediagen image generate", () => {
   it("exits 2 for an exponent-form --seed", async () => {
     const result = await run([
       "image", "generate", "x",
-      "--provider", "qwen",
+      "--provider", "dashscope",
       "--api-key", API_KEY,
       "--seed", "1e2",
     ]);
@@ -1056,7 +828,7 @@ describe("mediagen image generate", () => {
   it("exits 2 for a boolean flag without true/false", async () => {
     const result = await run([
       "image", "generate", "x",
-      "--provider", "qwen",
+      "--provider", "dashscope",
       "--api-key", API_KEY,
       "--watermark", "maybe",
     ]);
@@ -1095,7 +867,7 @@ describe("mediagen image generate", () => {
 
 describe("mediagen image edit", () => {
   it("exits 2 with a message about --image when no image is given", async () => {
-    const result = await run(["image", "edit", "x", "--provider", "qwen", "--api-key", API_KEY]);
+    const result = await run(["image", "edit", "x", "--provider", "dashscope", "--api-key", API_KEY]);
 
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("--image");
@@ -1107,7 +879,7 @@ describe("mediagen image edit", () => {
 
     const result = await run([
       "image", "edit", "make the sky orange",
-      "--provider", "qwen",
+      "--provider", "dashscope",
       "--api-key", API_KEY,
       "--image", file,
       "--out-dir", outDir,
@@ -1126,7 +898,7 @@ describe("mediagen image edit", () => {
 
     const result = await run([
       "image", "edit", "combine them",
-      "--provider", "qwen",
+      "--provider", "dashscope",
       "--api-key", API_KEY,
       "--image", first,
       "--image", second,
@@ -1142,7 +914,7 @@ describe("mediagen image edit", () => {
 
     const result = await run([
       "image", "edit", "brighten it",
-      "--provider", "ark",
+      "--provider", "volcengine",
       "--api-key", API_KEY,
       "--image", "https://example.com/input.jpg",
       "--layer-decomposition", "true",

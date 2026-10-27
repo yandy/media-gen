@@ -69,10 +69,27 @@ beforeEach(() => {
   // directory exists but stayed empty.
 
   // A real config.toml, so `output_dir` keeps generated files out of the repo
-  // and the run exercises config loading as well.
+  // and the run exercises config loading as well. Providers are declared here
+  // because nothing is built in any more.
   fs.writeFileSync(
     path.join(configDir, "config.toml"),
-    `default_provider = "qwen"\noutput_dir = ${JSON.stringify(outDir)}\n`,
+    [
+      'default_provider = "dashscope"',
+      `output_dir = ${JSON.stringify(outDir)}`,
+      "",
+      "[providers.dashscope]",
+      'api_type = "qwen"',
+      'base_url = "https://dashscope.aliyuncs.com"',
+      'model = "qwen-image-3.0"',
+      'api_key_env = "DASHSCOPE_API_KEY"',
+      "",
+      "[providers.volcengine]",
+      'api_type = "ark"',
+      'base_url = "https://ark.cn-beijing.volces.com"',
+      'model = "doubao-seedream-5-0-flash-260915"',
+      'api_key_env = "ARK_API_KEY"',
+      "",
+    ].join("\n"),
   );
 
   for (const key of TRACKED_ENV) originalEnv[key] = process.env[key];
@@ -183,7 +200,7 @@ describe("smoke: mediagen image generate (qwen, text to image)", () => {
     expect(saved.index).toBe(0);
     expect(saved.url).toBe(IMAGE_URL);
     expect(path.dirname(saved.path)).toBe(outDir);
-    expect(path.basename(saved.path)).toMatch(/^qwen-qwen-image-3-0-\d{8}-\d{6}-0\.png$/);
+    expect(path.basename(saved.path)).toMatch(/^dashscope-qwen-image-3-0-\d{8}-\d{6}-0\.png$/);
     expect(fs.readFileSync(saved.path).equals(IMAGE_BYTES)).toBe(true);
     expect(fs.readdirSync(outDir)).toEqual([path.basename(saved.path)]);
 
@@ -208,7 +225,7 @@ describe("smoke: mediagen image edit (ark, one local PNG)", () => {
     const code = await main([
       "image", "edit", "make it blue",
       "--image", png,
-      "--provider", "ark",
+      "--provider", "volcengine",
       "--json",
     ]);
 

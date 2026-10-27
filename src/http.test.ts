@@ -21,7 +21,6 @@ function provider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     base_url: "https://dashscope.example.com",
     model: "qwen-image-3.0",
     path: QWEN_PATH,
-    custom: false,
     ...overrides,
   };
 }
@@ -428,7 +427,7 @@ describe("callImageApi: a 404 with an empty body", () => {
 
     const error = await rejection(
       callImageApi({
-        provider: provider({ name: "my-qwen", base_url: "https://relay.example.com", custom: true }),
+        provider: provider({ name: "my-qwen", base_url: "https://relay.example.com" }),
         apiKey: API_KEY,
         request: imageRequest(),
       }),

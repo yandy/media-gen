@@ -29,7 +29,6 @@ function qwen(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     model: "qwen-image-3.0",
     path: "/compatible-mode/v1/images/generations",
     api_key_env: "DASHSCOPE_API_KEY",
-    custom: false,
     ...overrides,
   };
 }
@@ -42,14 +41,13 @@ function ark(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     model: "doubao-seedream-5-0-flash-260915",
     path: "/api/v3/images/generations",
     api_key_env: "ARK_API_KEY",
-    custom: false,
     ...overrides,
   };
 }
 
 function withoutApiKeyEnv(provider: ProviderConfig): ProviderConfig {
   const { api_key_env: _ignored, ...rest } = provider;
-  return { ...rest, custom: false };
+  return rest;
 }
 
 function proxy(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
@@ -59,7 +57,6 @@ function proxy(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     base_url: "https://proxy.example.com",
     model: "some-model",
     path: "/api/v3/images/generations",
-    custom: true,
     ...overrides,
   };
 }

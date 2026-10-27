@@ -3,13 +3,23 @@ import os from "node:os";
 import path from "node:path";
 import { parse, type TomlTable } from "smol-toml";
 import { ConfigError, malformedDocumentMessage, unreadableFileMessage } from "./errors.js";
-import { BUILTIN_PROVIDERS, DIALECT_DEFAULT_PATHS } from "./providers.js";
+import { DIALECT_DEFAULT_PATHS, SEED_CONFIG } from "./providers.js";
 import type { Dialect, ProviderConfig } from "./types.js";
 
+/** One entry from `[providers.<name>]` in config.toml, before validation. */
+export interface ProviderOverride {
+  api_type?: Dialect;
+  base_url?: string;
+  model?: string;
+  path?: string;
+  api_key_env?: string;
+}
+
 export interface MediagenConfig {
+  /** `""` when config.toml does not set it; resolveProvider() then explains. */
   default_provider: string;
   output_dir: string;
-  providers: Record<string, Partial<ProviderConfig> & { api_type: Dialect }>;
+  providers: Record<string, ProviderOverride>;
 }
 
 const PROVIDER_STRING_FIELDS = ["base_url", "model", "path", "api_key_env"] as const;
@@ -28,10 +38,34 @@ export function configPath(): string {
   return path.join(configDir(), "config.toml");
 }
 
+/**
+ * Writes the seed configuration when config.toml is absent, so that the first
+ * run leaves the user something with comments to edit rather than a command
+ * that fails on an empty store.
+ *
+ * Best effort: a read-only or otherwise unwritable config dir must not stop the
+ * read-only commands (`config show`, `auth status`, `config path`). When the
+ * write fails the caller simply sees an empty provider table.
+ */
+export function ensureConfigFile(): void {
+  const file = configPath();
+  if (fs.existsSync(file)) return;
+
+  try {
+    fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, SEED_CONFIG);
+  } catch {
+    // Best effort: losing the seed is recoverable by editing the path by hand,
+    // while throwing here would make every command unusable.
+  }
+}
+
 export function loadConfig(): MediagenConfig {
+  ensureConfigFile();
+
   const file = configPath();
   if (!fs.existsSync(file)) {
-    return { default_provider: "qwen", output_dir: process.cwd(), providers: {} };
+    return { default_provider: "", output_dir: process.cwd(), providers: {} };
   }
 
   let source: string;
@@ -63,56 +97,66 @@ export function loadConfig(): MediagenConfig {
   }
 
   return {
-    default_provider: readOptionalString(parsed, "default_provider", file) ?? "qwen",
+    default_provider: readOptionalString(parsed, "default_provider", file) ?? "",
     output_dir: readOptionalString(parsed, "output_dir", file) ?? process.cwd(),
     providers,
   };
 }
 
+/**
+ * The single resolution path: a provider exists because config.toml declares it,
+ * so `api_type`, `base_url` and `model` must all be written down. Only `path` is
+ * filled in from the dialect, and `api_key_env` is never inferred — a key
+ * belongs to the entry that names it.
+ */
 export function resolveProvider(name: string, config: MediagenConfig): ProviderConfig {
-  const override = config.providers[name];
-  const builtin = BUILTIN_PROVIDERS[name];
-
-  if (builtin) {
-    return { ...builtin, ...override, name, custom: false };
-  }
-
-  if (!override) {
+  const file = configPath();
+  if (name === "") {
     throw new ConfigError(
-      `unknown provider "${name}": run "mediagen login" for a built-in provider, or add a [providers.${name}] table to ${configPath()}`,
+      `no provider selected: set "default_provider" in ${file} or pass --provider <name>`,
     );
   }
 
-  const apiType = override.api_type;
-  const baseUrl = override.base_url;
-  const model = override.model;
-  if (!apiType || !baseUrl || !model) {
-    const missing: string[] = [];
-    if (!apiType) missing.push("api_type");
-    if (!baseUrl) missing.push("base_url");
-    if (!model) missing.push("model");
+  const entry = config.providers[name];
+  if (entry === undefined) {
     throw new ConfigError(
-      `provider "${name}" in config.toml is missing required field(s): ${missing.join(", ")}`,
+      `unknown provider "${name}": no [providers.${name}] table in ${file}; ` +
+        `add one by hand, or run "mediagen config add ${name} ` +
+        `--api-type <qwen|ark> --base-url <url> --model <id>"`,
     );
   }
 
-  return {
-    ...override,
+  const apiType = entry.api_type;
+  const baseUrl = entry.base_url;
+  const model = entry.model;
+
+  const missing: string[] = [];
+  if (apiType === undefined) missing.push("api_type");
+  if (baseUrl === undefined) missing.push("base_url");
+  if (model === undefined) missing.push("model");
+  if (apiType === undefined || baseUrl === undefined || model === undefined) {
+    throw new ConfigError(
+      `provider "${name}" in ${file} is missing required field(s): ${missing.join(", ")}`,
+    );
+  }
+
+  const provider: ProviderConfig = {
     name,
     api_type: apiType,
     base_url: baseUrl,
     model,
-    path: override.path ?? DIALECT_DEFAULT_PATHS[apiType],
-    custom: true,
+    path: entry.path ?? DIALECT_DEFAULT_PATHS[apiType],
   };
+  if (entry.api_key_env !== undefined) provider.api_key_env = entry.api_key_env;
+  return provider;
 }
 
 function readProviderOverride(
   name: string,
   file: string,
   table: TomlTable,
-): Partial<ProviderConfig> & { api_type: Dialect } {
-  const override: Partial<ProviderConfig> = {};
+): ProviderOverride {
+  const override: ProviderOverride = {};
 
   const apiType = table.api_type;
   if (apiType !== undefined) {
@@ -133,7 +177,7 @@ function readProviderOverride(
     override[field] = value;
   }
 
-  return override as Partial<ProviderConfig> & { api_type: Dialect };
+  return override;
 }
 
 function readOptionalString(table: TomlTable, key: string, file: string): string | undefined {
