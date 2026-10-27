@@ -29,6 +29,7 @@ import { ConfigError, UsageError } from "./errors.js";
 import { runGenerate, type GenerateOptions } from "./generate.js";
 import { renderError, renderHuman, renderJson, type RenderedOutput } from "./output.js";
 import { shellArg, tomlBasicString, tomlKey } from "./toml.js";
+import { normalizeHttpBaseUrl } from "./util.js";
 
 /**
  * Everything the CLI needs from the outside world that tests must be able to
@@ -895,24 +896,15 @@ function keyStatus(name: string, apiKeyEnv: string | undefined): KeyStatus {
 }
 
 function normalizeBaseUrl(value: string): string {
-  // new URL() tolerates surrounding whitespace, so trim first: whatever passes
-  // validation is exactly what gets persisted and concatenated with the path.
-  const trimmed = value.trim();
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
+  // normalizeHttpBaseUrl() trims, so whatever passes validation is exactly what
+  // gets persisted and concatenated with the dialect endpoint.
+  const normalized = normalizeHttpBaseUrl(value);
+  if (normalized === undefined) {
     throw new UsageError(
-      `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) URL`,
+      `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) URL without query or fragment`,
     );
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new UsageError(
-      `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) URL`,
-    );
-  }
-  // Trailing slashes would double up with the provider path.
-  return trimmed.replace(/\/+$/, "");
+  return normalized;
 }
 
 /** Appends a complete `[providers.<name>]` table; the caller checked it is absent. */

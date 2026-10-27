@@ -25,6 +25,25 @@ export function isUrl(value: string): boolean {
 }
 
 /**
+ * Normalizes a base URL for concatenation with a dialect endpoint: absolute
+ * http(s) only, no query or fragment (they would be swallowed by the appended
+ * path), trailing slashes removed. Returns undefined when `value` does not
+ * qualify, so each caller can raise its own error class.
+ */
+export function normalizeHttpBaseUrl(value: string): string | undefined {
+  const trimmed = value.trim();
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+  if (url.search !== "" || url.hash !== "") return undefined;
+  return trimmed.replace(/\/+$/, "");
+}
+
+/**
  * Normalizes an image reference into a value both vendors accept: a URL, a
  * `data:` URL, or a local file encoded as `data:<mime>;base64,<data>`.
  */

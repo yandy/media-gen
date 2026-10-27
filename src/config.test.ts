@@ -329,6 +329,44 @@ describe("resolveProvider", () => {
     expect(error.message).toContain("model");
   });
 
+  it("rejects a base_url that is not an absolute http(s) URL", () => {
+    writeConfig(
+      '[providers.qwen]\napi_type = "qwen"\nbase_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"\nmodel = "m"\n',
+    );
+
+    const error = thrownBy(() => resolveProvider("qwen", loadConfig()));
+
+    expect(error).toBeInstanceOf(ConfigError);
+    expect(error.message).toContain("base_url");
+    expect(error.message).toContain("workspace-id");
+    expect(error.message).toContain("config.toml");
+  });
+
+  it("strips trailing slashes from base_url", () => {
+    writeConfig(
+      '[providers.p]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3/"\nmodel = "m"\n',
+    );
+
+    expect(resolveProvider("p", loadConfig()).base_url).toBe("https://proxy.example.com/api/v3");
+  });
+
+  it("rejects a base_url carrying a query string or fragment", () => {
+    writeConfig(
+      '[providers.p]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3?x=1"\nmodel = "m"\n',
+    );
+
+    expect(thrownBy(() => resolveProvider("p", loadConfig()))).toBeInstanceOf(ConfigError);
+  });
+
+  it("rejects an empty base_url", () => {
+    writeConfig('[providers.p]\napi_type = "ark"\nbase_url = ""\nmodel = "m"\n');
+
+    const error = thrownBy(() => resolveProvider("p", loadConfig()));
+
+    expect(error).toBeInstanceOf(ConfigError);
+    expect(error.message).toContain("base_url");
+  });
+
   it("throws ConfigError pointing at config.toml for an unknown provider", () => {
     const error = thrownBy(() => resolveProvider("nope", emptyConfig()));
 

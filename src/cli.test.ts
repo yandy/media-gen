@@ -589,6 +589,17 @@ describe("mediagen config add: value hygiene", () => {
     expect(readConfig()).not.toContain("[providers.p1]");
   });
 
+  it("rejects a --base-url carrying a query string", async () => {
+    const result = await add([
+      "p1", "--api-type", "qwen", "--base-url", "https://k.example.com/v1?x=1", "--model", "m",
+    ]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("--base-url");
+    expect(fs.existsSync(configPath())).toBe(true);
+    expect(readConfig()).not.toContain("[providers.p1]");
+  });
+
   it("rejects a blank provider name", async () => {
     const result = await add([
       "", "--api-type", "qwen", "--base-url", "https://k.example.com", "--model", "m",

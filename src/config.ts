@@ -6,6 +6,7 @@ import { parse, type TomlTable } from "smol-toml";
 import { ConfigError, malformedDocumentMessage, unreadableFileMessage, unwritableFileMessage } from "./errors.js";
 import { SEED_CONFIG } from "./providers.js";
 import { shellArg, tomlKey } from "./toml.js";
+import { normalizeHttpBaseUrl } from "./util.js";
 import type { Dialect, ProviderConfig } from "./types.js";
 
 /** One entry from `[providers.<name>]` in config.toml, before validation. */
@@ -180,18 +181,20 @@ export function resolveProvider(name: string, config: MediagenConfig): ProviderC
   }
 
   const apiType = entry.api_type;
-  const baseUrl = entry.base_url;
+  const declaredBaseUrl = entry.base_url;
   const model = entry.model;
 
   const missing: string[] = [];
   if (apiType === undefined) missing.push("api_type");
-  if (baseUrl === undefined) missing.push("base_url");
+  if (declaredBaseUrl === undefined) missing.push("base_url");
   if (model === undefined) missing.push("model");
-  if (apiType === undefined || baseUrl === undefined || model === undefined) {
+  if (apiType === undefined || declaredBaseUrl === undefined || model === undefined) {
     throw new ConfigError(
       `provider "${name}" in ${file} is missing required field(s): ${missing.join(", ")}`,
     );
   }
+
+  const baseUrl = resolveBaseUrl(name, apiType, file, declaredBaseUrl);
 
   const provider: ProviderConfig = {
     name,
@@ -201,6 +204,25 @@ export function resolveProvider(name: string, config: MediagenConfig): ProviderC
   };
   if (entry.api_key_env !== undefined) provider.api_key_env = entry.api_key_env;
   return provider;
+}
+
+/**
+ * config.toml has no flag parser in front of it, so base_url is validated here,
+ * before anything is spent. The qwen example is the workspace-scoped host: the
+ * public host answers the images endpoint with a 404.
+ */
+function resolveBaseUrl(name: string, apiType: Dialect, file: string, value: string): string {
+  const normalized = normalizeHttpBaseUrl(value);
+  if (normalized !== undefined) return normalized;
+
+  const example =
+    apiType === "qwen"
+      ? "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1 (replace <workspace-id>)"
+      : "https://ark.cn-beijing.volces.com/api/v3";
+  throw new ConfigError(
+    `provider "${name}" in ${file} has invalid base_url ${JSON.stringify(value)}: ` +
+      `expected an absolute http(s) URL ending at the version segment, like ${example}`,
+  );
 }
 
 function readProviderOverride(
