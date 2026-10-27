@@ -44,19 +44,33 @@ size reference, examples. Everything below is the short version.
 
 | model | provider | pick it when |
 |---|---|---|
-| `qwen-image-3.0` | `--provider dashscope` | text rendering (CJK + Latin), editing; needs your workspace host (see below) |
+| `qwen-image-3.0` | `--provider aliyun` | text rendering (CJK + Latin), editing; needs your workspace host (see below) |
 | `doubao-seedream-5-0-flash-260915` | `--provider volcengine` | speed: drafts, iteration |
 | `doubao-seedream-5-0-pro` | `--provider volcengine --model doubao-seedream-5-0-pro` | highest quality |
 
-`dashscope` and `volcengine` are the two provider names the first run writes into
+`aliyun` and `volcengine` are the two provider names the first run writes into
 `config.toml`; rename them freely. A model is usable only if it is listed in
 `models = [...]` under that provider's `image` table, and a second model of the same
 vendor is one more entry there — never another provider. Ids are dated snapshots, so
 edit `models` (and `default`) in `config.toml` as they roll forward.
-`--size` takes a tier (`2K`), pixels (`2048x2048`), or `auto` (qwen only); `--n`
-takes 1-6 — on ark each image is a separate paid request. Vendor-specific flags
-(`--negative-prompt` is qwen-only, `--output-format` is ark-only) fail before
-anything is sent.
+
+### Protocols
+
+Each provider's task table declares its own `api_type`, so one account can speak one
+protocol for images and another for video:
+
+| `api_type` | wire format | pick it when |
+|---|---|---|
+| `openai` | the OpenAI Images shape: flat `{model, prompt, size, n}`, `data[].url` back | Bailian's `compatible-mode`, most third-party proxies |
+| `dashscope` | Alibaba's native shape: `input.messages` + `parameters`, `output.choices[].message.content[].image` back | Bailian's native endpoint, or a gateway that exposes it (see below) |
+| `ark` | Volcengine's own API: OpenAI-shaped for images, with its own parameters and per-item errors | Volcengine Ark, for images and video |
+
+`qwen` still works as a deprecated alias of `openai`. A flag the selected protocol
+does not accept fails before any paid request is sent (`--output-format` is ark-only,
+`--prompt-extend-mode` is openai-only). `--size` takes a tier (`2K`), pixels
+(`2048x2048`), or `auto` (openai only); `dashscope` takes pixels only, because it
+sends `宽*高` and has no tier or `auto` concept. `--n` takes 1-6 — on ark each image
+is a separate paid request.
 
 ## Output
 
@@ -90,52 +104,57 @@ credential is.
 default_provider = "volcengine"
 # output_dir = "./media-output"
 
-[providers.volcengine]              # the account: protocol, host, key
-api_type    = "ark"
+[providers.volcengine]              # the account: host + key
 base_url    = "https://ark.cn-beijing.volces.com"
 api_key_env = "ARK_API_KEY"
 
 [providers.volcengine.image]        # what that account can do, one table per task
-default = "doubao-seedream-5-0-flash-260915"
-models  = ["doubao-seedream-5-0-flash-260915", "doubao-seedream-5-0-pro"]
+api_type = "ark"                    # the protocol is declared here, not on the account
+default  = "doubao-seedream-5-0-flash-260915"
+models   = ["doubao-seedream-5-0-flash-260915", "doubao-seedream-5-0-pro"]
 
 [providers.volcengine.video]
-default = "doubao-seedance-1-0-pro"
-models  = ["doubao-seedance-1-0-pro"]
+api_type = "ark"
+default  = "doubao-seedance-1-0-pro"
+models   = ["doubao-seedance-1-0-pro"]
 
-[providers.dashscope]
-api_type    = "qwen"
+[providers.aliyun]
 base_url    = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"
 api_key_env = "DASHSCOPE_API_KEY"
 
-[providers.dashscope.image]
-default = "qwen-image-3.0"
-models  = ["qwen-image-3.0"]
+[providers.aliyun.image]
+api_type = "openai"
+default  = "qwen-image-3.0"
+models   = ["qwen-image-3.0"]
 
-[providers.my-proxy]                # a second account of the same protocol
-api_type    = "qwen"
-base_url    = "https://proxy.example.com/my-gateway"   # a gateway prefix is fine
-api_key_env = "MY_PROXY_KEY"
+[providers.my-gateway]              # a gateway that serves the native protocol
+base_url    = "https://gateway.example.com"
+api_key_env = "MY_GATEWAY_KEY"
 
-[providers.my-proxy.image]
-default = "qwen-image-3.0"
-models  = ["qwen-image-3.0"]
+[providers.my-gateway.image]
+api_type = "dashscope"
+path     = "/v1/images/generations" # the gateway's own path, not Bailian's
+default  = "qwen-image-2.0-pro"
+models   = ["qwen-image-2.0-pro"]
 ```
 
-A provider is **one account**: a protocol (`api_type`, `qwen` or `ark`), one host
-(`base_url`) and an optional `api_key_env`. Each task it serves hangs off it by name
-(`[providers.<name>.image]`, `[providers.<name>.video]`), and lists the model ids you
-allow there plus the `default` used when `--model` is absent. `timeout_seconds` is
-optional per task (300 for image, 1800 for video). Two models of the same vendor are
-two entries in one `models` list, not two providers.
+A provider is **one account**: a host (`base_url`) and an optional `api_key_env`.
+Each task it serves hangs off it by name (`[providers.<name>.image]`,
+`[providers.<name>.video]`) and declares its own `api_type`, the model ids you allow
+there plus the `default` used when `--model` is absent. `timeout_seconds` is optional
+per task (300 for image, 1800 for video). Two models of the same vendor are two
+entries in one `models` list, not two providers; two protocols for one account are two
+`api_type` lines, not two providers. `api_type` may also sit on the account table as
+the default for every task under it.
 
 **`base_url` is the origin** — an optional gateway prefix, never a version segment.
 The version segment belongs to the endpoint, which the dialect owns per task
-(`/api/v3/images/generations`, `/compatible-mode/v1/images/generations`), so switching
+(`/api/v3/images/generations`, `/compatible-mode/v1/images/generations`,
+`/api/v1/services/aigc/multimodal-generation/generation`), so switching
 task changes only the path. A `base_url` that still ends with `/api/v3`, `/api/v1` or
 `/compatible-mode/v1` on a vendor host is refused before any request, with the origin
 to paste in. The file is the only source of truth: nothing is built in, and the first
-run just writes the above into `config.toml` for you to edit. The seeded qwen entry
+run just writes the above into `config.toml` for you to edit. The seeded `aliyun` entry
 carries a `<workspace-id>` placeholder which commands reject before spending anything
 when that provider is the one selected, so only that line needs your attention.
 
