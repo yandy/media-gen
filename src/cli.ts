@@ -121,7 +121,7 @@ Built for AI agents: explicit flags, no interactive prompts, machine-readable ou
 
 Quickstart:
   mediagen config show                                    # any command creates config.toml on first use
-  mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com --model qwen-image-3.0
+  mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com/v1 --model qwen-image-3.0
   mediagen login --provider my-proxy --api-key sk-...      # store a key in auth.json
   mediagen image generate "a red fox in fresh snow" --provider my-proxy --out-dir ./out
   mediagen image edit "make the sky sunset orange" --image ./photo.jpg
@@ -176,7 +176,7 @@ function imageHelpText(command: "generate" | "edit"): string {
   mediagen image generate "product photo on a white background" --provider my-proxy --out-dir ./shots
 
   # a one-off test against a proxy, without touching config.toml
-  mediagen image generate "colour test card" --provider dashscope --base-url https://proxy.example.com --api-key sk-...`;
+  mediagen image generate "colour test card" --provider dashscope --base-url https://proxy.example.com/v1 --api-key sk-...`;
 
   return `
 ${intro}
@@ -235,7 +235,7 @@ const IMAGE_OPTION_HELP = {
   outDir: "where to write files (default: config output_dir, else cwd)",
   json: "print one JSON object instead of file paths",
   apiKey: "one-off API key; overrides env and auth.json",
-  baseUrl: "one-off API base URL, e.g. a proxy",
+  baseUrl: "one-off API base URL, up to the version segment, e.g. a proxy",
 } as const;
 
 /** Adds the flags shared by `image generate` and `image edit`. */
@@ -334,7 +334,7 @@ export function createProgram(options: ProgramOptions = {}): Command {
     .command("add <name>")
     .description("Create a [providers.<name>] table in config.toml")
     .option("--api-type <dialect>", "protocol dialect: qwen or ark")
-    .option("--base-url <url>", "the provider's API base URL")
+    .option("--base-url <url>", "the provider's API base URL, up to the version segment")
     .option("--model <id>", "the model id this provider defaults to")
     .option("--api-key-env <VAR>", "environment variable holding this provider's key")
     .option("--json", "print a JSON result")
