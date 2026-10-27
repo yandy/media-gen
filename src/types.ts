@@ -81,6 +81,12 @@ export interface TaskAdapter {
   createPath: string;
   buildRequest(req: ImageRequest): unknown;
   parseResponse(json: unknown, requestId?: string): ParsedResponse;
+  /**
+   * Extracts a vendor error from a non-2xx body. Dialects whose errors do not
+   * use `{ error: { code, message } }` implement this; callers fall back to the
+   * generic shape when it is absent or returns undefined.
+   */
+  parseErrorBody?(json: unknown): { code?: string; message: string } | undefined;
 }
 
 /** Which tasks this dialect implements; a task absent here has no endpoint yet. */

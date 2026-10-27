@@ -6,6 +6,7 @@ import type {
   ImageRequest,
   ParsedResponse,
   ProviderConfig,
+  TaskAdapter,
   TaskBinding,
 } from "./types.js";
 
@@ -155,6 +156,7 @@ function errorForStatus(
   status: number,
   provider: ProviderConfig,
   dialect: Dialect,
+  adapter: TaskAdapter,
   redact: (text: string) => string,
 ): ApiError {
   if (status === 404 && text.trim() === "" && dialect === "openai") {
@@ -168,7 +170,7 @@ function errorForStatus(
     json = undefined;
   }
 
-  const vendor = vendorError(json);
+  const vendor = adapter.parseErrorBody?.(json) ?? vendorError(json);
   if (vendor !== undefined) {
     // The code is vendor/proxy output too: a proxy that reflects the request
     // headers would otherwise leak the key through `ApiError.code`.
@@ -254,7 +256,7 @@ export async function callApi(params: CallApiParams): Promise<ParsedResponse> {
   const text = await readResponseText(response, url, redact, timeoutSeconds);
 
   if (!response.ok) {
-    throw errorForStatus(text, response.status, provider, binding.dialect, redact);
+    throw errorForStatus(text, response.status, provider, binding.dialect, adapter, redact);
   }
 
   const json = parseJson(text, response.status, redact);

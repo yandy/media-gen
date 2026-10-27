@@ -509,6 +509,38 @@ describe("callApi: the wire", () => {
   });
 });
 
+describe("callApi: a native error body", () => {
+  it("surfaces the code the dashscope dialect reports at the top level", async () => {
+    stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            request_id: "r1",
+            code: "InvalidApiKey",
+            message: "Invalid API-key provided.",
+          }),
+          { status: 401 },
+        ),
+    );
+
+    const error = await rejection(
+      callApi({
+        binding: bindingOf(
+          provider({ name: "gw", api_type: "dashscope", base_url: "https://gw.example.com" }),
+        ),
+        apiKey: API_KEY,
+        request: imageRequest(),
+      }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    // The code only exists when the adapter parsed the envelope; a body excerpt
+    // would carry the text but no code.
+    expect((error as ApiError).code).toBe("InvalidApiKey");
+    expect(error.message).toContain("Invalid API-key provided.");
+  });
+});
+
 describe("callApi: a 404 with an empty body", () => {
   function arkProvider(): ProviderConfig {
     return provider({

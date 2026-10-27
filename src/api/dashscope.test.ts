@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildDashscopeRequest, parseDashscopeResponse, toDashscopeSize } from "./dashscope.js";
+import {
+  buildDashscopeRequest,
+  parseDashscopeError,
+  parseDashscopeResponse,
+  toDashscopeSize,
+} from "./dashscope.js";
 import type { ImageRequest } from "../types.js";
 
 function request(overrides: Partial<ImageRequest> = {}): ImageRequest {
@@ -131,5 +136,21 @@ describe("parseDashscopeResponse", () => {
     expect(() =>
       parseDashscopeResponse({ request_id: "r", code: "InvalidParameter", message: "n must be 1" }),
     ).toThrowError(expect.objectContaining({ code: "InvalidParameter", message: "n must be 1" }));
+  });
+});
+
+describe("parseDashscopeError", () => {
+  it("reads the native error envelope", () => {
+    expect(
+      parseDashscopeError({ request_id: "r", code: "InvalidParameter", message: "n must be 1" }),
+    ).toEqual({ code: "InvalidParameter", message: "n must be 1" });
+  });
+
+  it("drops a code that is not a string", () => {
+    expect(parseDashscopeError({ code: 400, message: "bad" })).toEqual({ message: "bad" });
+  });
+
+  it("ignores bodies that are not the native error envelope", () => {
+    expect(parseDashscopeError({ error: { code: "x", message: "y" } })).toBeUndefined();
   });
 });

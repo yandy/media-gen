@@ -146,8 +146,25 @@ export function parseDashscopeResponse(json: unknown, requestId?: string): Parse
   return parsed;
 }
 
+/**
+ * The native error envelope reports failures at the top level — no `error`
+ * object — so the generic extractor in http.ts cannot see them.
+ */
+export function parseDashscopeError(
+  json: unknown,
+): { code?: string; message: string } | undefined {
+  if (!isRecord(json)) return undefined;
+  const message = typeof json.message === "string" ? json.message.trim() : "";
+  if (message === "") return undefined;
+
+  const code =
+    typeof json.code === "string" && json.code !== "" ? json.code : undefined;
+  return code === undefined ? { message } : { code, message };
+}
+
 export const DashscopeDialect: TaskAdapter = {
   createPath: "/api/v1/services/aigc/multimodal-generation/generation",
   buildRequest: buildDashscopeRequest,
   parseResponse: parseDashscopeResponse,
+  parseErrorBody: parseDashscopeError,
 };
