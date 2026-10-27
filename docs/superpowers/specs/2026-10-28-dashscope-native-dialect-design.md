@@ -173,9 +173,10 @@ models   = ["qwen/qwen-image-3.0", "qwen/qwen-image-3.0-pro"]
 
 - 取 `output.choices[].message.content[]` 中所有带非空 `image` 的项，按序成
   `ImageResult[]`；`text` 项（图文交织）忽略。
-- `output` 缺失 / `choices` 非数组或空 / 一个 `image` 都没有 → `ApiError`，文案点名
-  原生形态（`output.choices[].message.content[].image`）；`content: []` 的情况要说明是
-  「上游未产出图像」，不是「格式错误」。
+- `output` 缺失 / `choices` 非数组 → `ApiError`，文案点名原生形态
+  （`output.choices[].message.content[].image`）；`choices` 为空数组或 `content: []`
+  → 同一信封但零图像，报「上游未产出图像」（`dashscope API returned no images`）而不是
+  「格式错误」，因为它指向提示词而非解析器。（实现按此处的区分落地，评审时确认。）
 - `usage` 原样透传；body 顶层 `request_id` 进 `requestId`（HTTP 头 `x-request-id` 仍兜底）。
 - 顶层 `code` + `message`（即便意外出现在 2xx）→ `ApiError(message, code)`。
 

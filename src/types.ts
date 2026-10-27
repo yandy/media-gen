@@ -7,12 +7,15 @@ export type Dialect = "openai" | "dashscope" | "ark";
 /** A provider is the ledger — host, credentials — never a model. */
 export interface ProviderConfig {
   name: string;
+  /**
+   * The provider-level default protocol, unresolved: a task may override it.
+   * Never decide how to serialize from this — read `TaskBinding.dialect`, which
+   * is the protocol the run actually speaks.
+   */
   api_type?: Dialect;
   base_url: string;
   api_key_env?: string;
 }
-
-/** Where the ledger's default api_type applies; the task's own value wins in TaskBinding. */
 
 export interface ImageRequest {
   model: string;
@@ -22,7 +25,7 @@ export interface ImageRequest {
   n: number;
   seed?: number;
   watermark?: boolean;
-  // qwen extras
+  // openai / dashscope options
   negative_prompt?: string;
   prompt_extend?: boolean;
   prompt_extend_mode?: "direct" | "agent";

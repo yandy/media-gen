@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authPath, loadAuth } from "./auth.js";
 import { createProgram, main, requestsHelpOrVersion, type CliDeps } from "./cli.js";
 import { configPath, loadConfig } from "./config.js";
+import { SEED_CONFIG } from "./providers.js";
 
 const API_KEY = "sk-test1234567890";
 /** maskKey() shows the first four and last four characters only. */
@@ -387,6 +388,81 @@ describe("mediagen config path", () => {
       config_path: configPath(),
       auth_path: authPath(),
     });
+  });
+});
+
+describe("help examples name providers that exist", () => {
+  /** Every provider name the seed mentions, including its commented examples. */
+  function knownNames(): Set<string> {
+    const names = new Set<string>();
+    for (const match of SEED_CONFIG.matchAll(/^\s*#?\s*\[providers\.([^\].]+)\]/gm)) {
+      names.add(match[1] ?? "");
+    }
+    return names;
+  }
+
+  it("uses no provider name outside the seed in either help text", async () => {
+    const known = knownNames();
+    for (const argv of [["image", "generate", "--help"], ["image", "edit", "--help"]]) {
+      const result = await run(argv);
+      const exampleLines = result.stdout
+        .split("\n")
+        .filter((line) => line.trimStart().startsWith("mediagen "));
+      const referenced = exampleLines
+        .flatMap((line) => [...line.matchAll(/--provider ('[^']+'|\S+)/g)])
+        .map((match) => (match[1] ?? "").replace(/^'|'$/g, ""));
+      expect(referenced.length).toBeGreaterThan(0);
+      for (const name of referenced) expect(known).toContain(name);
+    }
+  });
+});
+
+describe("config show: deprecated aliases and missing protocols", () => {
+  it("marks a provider-declared qwen as the deprecated alias of openai", async () => {
+    writeConfig(
+      '[providers.legacy]\napi_type = "qwen"\nbase_url = "https://gw.example.com"\n\n[providers.legacy.image]\ndefault = "m"\nmodels = ["m"]\n',
+    );
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toMatch(/api_type: openai \(config\.toml\); declared as the deprecated alias "qwen"/);
+  });
+
+  it("marks a task-declared qwen the same way", async () => {
+    writeConfig(
+      '[providers.legacy]\nbase_url = "https://gw.example.com"\n\n[providers.legacy.image]\napi_type = "qwen"\ndefault = "m"\nmodels = ["m"]\n',
+    );
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toMatch(/api_type: openai \(config\.toml\); declared as the deprecated alias "qwen"/);
+  });
+
+  it("reports api_type as missing when neither the account nor a task declares one", async () => {
+    writeConfig(
+      '[providers.half]\nbase_url = "https://gw.example.com"\n\n[providers.half.image]\ndefault = "m"\nmodels = ["m"]\n',
+    );
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("missing: api_type");
+  });
+
+  it("says so when config add translated the deprecated alias", async () => {
+    const result = await run([
+      "config", "add",
+      "oldname",
+      "--api-type", "qwen",
+      "--base-url", "https://gw.example.com",
+      "--model", "m",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toContain('api_type "qwen" is a deprecated alias');
+    expect(result.stderr).toContain('writing api_type = "openai"');
   });
 });
 
@@ -1637,7 +1713,7 @@ models = ["m"]
     ]);
 
     expect(result.code).toBe(0);
-    expect(result.stderr).toContain('no dialect has a "video" adapter yet');
+    expect(result.stderr).toContain('the "ark" dialect has no "video" adapter yet');
   });
 
   it("shows each provider's tasks and marks the one with no adapter", async () => {

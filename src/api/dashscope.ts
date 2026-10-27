@@ -43,7 +43,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function toDashscopeSize(size: string): string {
   const value = size.trim();
   const pair = PIXEL_PAIR.exec(value);
-  if (pair === null) {
+  if (pair === null || Number(pair[1]) <= 0 || Number(pair[2]) <= 0) {
     throw new UsageError(
       `invalid --size ${JSON.stringify(size)}: the dashscope dialect sends a WxH pixel pair as 宽*高, e.g. 2048x2048`,
     );

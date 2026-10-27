@@ -35,6 +35,10 @@ describe("buildDashscopeRequest", () => {
     expect(toDashscopeSize("2048x1024")).toBe("2048*1024");
   });
 
+  it("rejects a zero-sized pixel pair at the wire boundary", () => {
+    expect(() => toDashscopeSize("0x0")).toThrow(/WxH/);
+  });
+
   it("rejects a size tier at the wire boundary", () => {
     expect(() => toDashscopeSize("2K")).toThrow(/WxH/);
   });

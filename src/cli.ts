@@ -171,10 +171,10 @@ function imageHelpText(command: "generate" | "edit"): string {
   const examples =
     command === "edit"
       ? `  # edit a local file (local paths are read and sent as base64 data URLs)
-  mediagen image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider dashscope
+  mediagen image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider aliyun
 
   # combine several references
-  mediagen image edit "put the character from the first image into the scene from the second" --image ./character.png --image ./scene.jpg --provider dashscope
+  mediagen image edit "put the character from the first image into the scene from the second" --image ./character.png --image ./scene.jpg --provider aliyun
 
   # ark layer decomposition: one paid request, several files back (base + layers)
   mediagen image edit "separate the sticker from its background" --image ./sticker.png --provider volcengine --layer-decomposition true --json
@@ -182,13 +182,13 @@ function imageHelpText(command: "generate" | "edit"): string {
   # a third-party proxy declared as [providers.my-proxy] in config.toml
   mediagen image edit "remove the timestamp" --image ./shot.png --provider my-proxy --out-dir ./out`
       : `  # text to image
-  mediagen image generate "a red fox in fresh snow, soft morning light" --provider dashscope --size 1024x1024 --out-dir ./out
+  mediagen image generate "a red fox in fresh snow, soft morning light" --provider aliyun --size 1024x1024 --out-dir ./out
 
   # image to image; "mediagen image edit" is the same command with --image required
-  mediagen image generate "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider dashscope
+  mediagen image generate "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider aliyun
 
   # several references at once
-  mediagen image generate "the character from the first image wearing the jacket from the second" --image ./character.png --image ./jacket.png --provider dashscope
+  mediagen image generate "the character from the first image wearing the jacket from the second" --image ./character.png --image ./jacket.png --provider aliyun
 
   # four ark variants as JSON, for an agent to parse
   mediagen image generate "minimalist logo for a coffee roastery" --provider volcengine --model doubao-seedream-5-0-pro --n 4 --seed 42 --json
@@ -804,6 +804,9 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
 
   const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
   const beforeTable = before.trim() === "" ? undefined : parseToml(before);
+  if (apiType === "qwen") {
+    writeErrLine('note: api_type "qwen" is a deprecated alias; writing api_type = "openai"');
+  }
   const after = appendProviderTable(before, provider, fields, task, model, dialect);
   assertFaithfulRewrite(beforeTable, after, provider, fields, task, model, dialect, file);
   try {
@@ -832,16 +835,16 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
     apiKeyEnv === undefined
       ? `run "${loginHint}" to store its key`
       : `set ${shellArg(apiKeyEnv)}, or run "${loginHint}"`;
-    if (adapterPath(dialect, task) === undefined) {
+  if (adapterPath(dialect, task) === undefined) {
     writeErrLine(
-      `note: no dialect has a "${task}" adapter yet; the table is stored and ` +
-        `"config show" will mark it until video lands`,
+      `note: the "${dialect}" dialect has no "${task}" adapter yet; the table is stored ` +
+        `and "config show" will mark it until it lands`,
     );
   }
 
   writeLine(
     [
-      `added provider "${provider}" to ${file} with a ${task} table defaulting to "${model}"`,
+      `added provider "${provider}" to ${file} with an ${task} table defaulting to "${model}"`,
       `another model of the same provider is one more entry in models = [...] under [providers.${tomlKey(provider)}.${task}]`,
       keyRoute,
     ].join("\n"),
@@ -901,11 +904,11 @@ function runConfigShow(flags: { json?: boolean }): void {
       `  ${view.name} (dialect ${
         view.api_type?.value ??
         (view.tasks?.some((task) => task.api_type !== undefined) === true ? "per task" : "unknown")
-      })${view.api_type?.note === undefined ? "" : `, ${view.api_type.note}`}`,
+      })`,
     );
     for (const field of ["api_type", "base_url", "api_key_env"] as const) {
       const value = view[field];
-      if (value !== undefined) lines.push(`    ${field}: ${show(value)}`);
+      if (value !== undefined) lines.push(`    ${field}: ${show(value)}${noteSuffix(value)}`);
     }
     if (view.missing !== undefined && view.missing.length > 0) {
       lines.push(`    missing: ${view.missing.join(", ")} (required in ${file})`);
@@ -989,6 +992,11 @@ function buildProviderView(name: string, entry: ProviderEntry): ProviderView {
       };
     }
   }
+
+  const declaresProtocol =
+    entry.api_type !== undefined ||
+    KNOWN_TASKS.some((task) => entry.tasks[task]?.api_type !== undefined);
+  if (!declaresProtocol) missing.push("api_type");
 
   const view: ProviderView = {
     name,

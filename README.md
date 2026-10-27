@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Generate and edit images through Alibaba Bailian (**qwen**) and Volcengine Ark
+Generate and edit images through Alibaba Bailian (Qwen-Image) and Volcengine Ark
 (**doubao / seedream**), save them to disk, print their paths. Explicit flags, no
 interactive prompts, `--json` for programs.
 
@@ -13,8 +13,8 @@ npm install -g @yandy0725/mediagen-cli
 # validates it before the command runs; config show itself only reads it.
 mediagen config show
 
-# Add an entry: one account (protocol + origin + key) with its image task table
-mediagen config add my-proxy --api-type qwen \
+# Add an entry: one account (origin + key); the protocol goes on its task table
+mediagen config add my-proxy --api-type openai \
   --base-url https://abc123.cn-beijing.maas.aliyuncs.com \
   --model qwen-image-3.0 --api-key-env DASHSCOPE_API_KEY
 # add --task video for a video table; another model is one more entry in models
@@ -79,7 +79,7 @@ Files are written to `--out-dir` (else `output_dir`, else the current directory)
 prints one absolute path per line on stdout; `--json` prints one object:
 
 ```json
-{"ok":true,"partial":false,"files":[{"path":"/tmp/out/dashscope-qwen-image-3-0-20261025-020839-0.png","index":0,"url":"https://dashscope-result.oss-cn-beijing.aliyuncs.com/1.png"}],"errors":[],"usage":{"image_count":1},"request_id":"a1b2c3d4"}
+{"ok":true,"partial":false,"files":[{"path":"/tmp/out/aliyun-qwen-image-3-0-20261025-020839-0.png","index":0,"url":"https://dashscope-result.oss-cn-beijing.aliyuncs.com/1.png"}],"errors":[],"usage":{"image_count":1},"request_id":"a1b2c3d4"}
 ```
 
 `partial: true` with exit `0` means some images were saved and some failed: those
@@ -181,9 +181,10 @@ A key belongs to a provider entry: `--api-key`, else that entry's `api_key_env`,
 else `auth.json`. There is no dialect-level default key variable, so two entries of
 the same dialect can use different keys. Keys are only ever printed masked.
 `base_url` lives in the file (with a one-off `--base-url` override on
-`image generate`), and it is validated before any request: for
-qwen, the public host answers the images endpoint with a `404`, so the seed keeps a
-placeholder that fails loudly instead. `mediagen config show` prints each provider's
+`image generate`), and it is validated before any request: Bailian's
+OpenAI-compatible endpoint (`compatible-mode`) is served only on a workspace-scoped
+host, so the seed keeps a placeholder that fails loudly instead. Bailian's native
+endpoint, which the `dashscope` protocol speaks, is served on the public host too. `mediagen config show` prints each provider's
 tasks, their models, and the endpoint each one would actually hit. Set
 `NODE_USE_ENV_PROXY=1` on Node >= 24 to honour `HTTP_PROXY`. Timeouts: per request
 `timeout_seconds` for the task (default 300 s, video 1800 s), 120 s per download.
@@ -202,7 +203,7 @@ npm run dev -- image generate --help
 ```
 
 `src/cli.ts` wires commander and maps errors to exit codes; `src/generate.ts` runs
-the pipeline (validate → resolve → call → download → report); `src/api/{qwen,ark}.ts`
+the pipeline (validate → resolve → call → download → report); `src/api/{qwen,ark,dashscope}.ts`
 are the dialect adapters behind the `DialectAdapter` seam in `src/types.ts`, with
 `config.ts`, `auth.ts`, `http.ts`, `download.ts` and `output.ts` around them.
 

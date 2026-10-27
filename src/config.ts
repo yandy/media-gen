@@ -122,8 +122,8 @@ export function prepareConfigFile(): void {
 
 /**
  * config.toml has no flag parser in front of it, so base_url is validated here,
- * before anything is spent. The qwen example is the workspace-scoped host: the
- * public host answers the images endpoint with a 404.
+ * before anything is spent. The openai example is the workspace-scoped host: the
+ * public host answers that endpoint with a 404.
  */
 function resolveBaseUrl(
   name: string,
@@ -146,10 +146,14 @@ function resolveBaseUrl(
     );
   }
 
+  // The protocol may be declared per task, so `undefined` is the normal case for
+  // an account table; a protocol-specific example would then be a guess.
   const example =
     apiType === "ark"
       ? "https://ark.cn-beijing.volces.com"
-      : "https://abc123.cn-beijing.maas.aliyuncs.com";
+      : apiType === "openai" || apiType === "dashscope"
+        ? "https://abc123.cn-beijing.maas.aliyuncs.com"
+        : "https://gateway.example.com";
   throw new ConfigError(
     `provider "${name}" has invalid base_url ${JSON.stringify(value)} under ${table}: ` +
       `expected an absolute http(s) origin — a gateway prefix is allowed, a version ` +
@@ -200,7 +204,7 @@ export function vendorPathIssue(value: string): OriginIssue | undefined {
 /**
  * What a `path` override should say when base_url already carries a prefix: the
  * adapter's path minus the vendor's own `<api>/<version>` root (two segments in
- * both dialects, `/api/v3` and `/compatible-mode/v1`). Only ever used to suggest a
+ * every dialect, `/api/v3`, `/compatible-mode/v1`). Only ever used to suggest a
  * value in an error message; the request itself still uses `createPath`.
  */
 function pathAfterVendorRoot(createPath: string | undefined): string | undefined {
@@ -215,6 +219,7 @@ function isVendorHost(hostname: string): boolean {
   return (
     host === "ark.cn-beijing.volces.com" ||
     host === "dashscope.aliyuncs.com" ||
+    host === "dashscope-intl.aliyuncs.com" ||
     host.endsWith(".maas.aliyuncs.com")
   );
 }
@@ -241,7 +246,7 @@ function isTable(value: unknown): value is TomlTable {
 // ---------------------------------------------------------------------------
 // Task-scoped providers: the shape config.toml uses.
 //
-// A provider is the ledger — protocol, host, credentials. Each task it serves
+// A provider is the ledger — host, credentials. Each task it serves
 // hangs off it by name (`[providers.x.image]`, `[providers.x.video]`) and owns
 // its models, default model and behavior knobs. The endpoint path belongs to
 // the (dialect, task) adapter, so one provider serves every task from one

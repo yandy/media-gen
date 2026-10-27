@@ -34,8 +34,8 @@ mediagen config show        # prints what resolves; any command creates config.t
 ```
 
 `base_url` is the origin: the protocol appends the endpoint path, version segment
-included, per task. Bailian's OpenAI-compatible endpoint needs its workspace-scoped
-host, and the public host 404s, so the seeded `[providers.aliyun].base_url` is a
+included, per task. Bailian's OpenAI-compatible endpoint (`compatible-mode`) is only
+served on a workspace-scoped host, so the seeded `[providers.aliyun].base_url` is a
 placeholder you must finish:
 replace `<workspace-id>` with your workspace id, e.g.
 `https://abc123.cn-beijing.maas.aliyuncs.com` (ark's seed is usable as written).
@@ -48,7 +48,7 @@ refused before anything is sent: add the id to that list instead of creating ano
 provider. To add another entry without hand-editing:
 
 ```bash
-mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com \
+mediagen config add my-proxy --api-type openai --base-url https://proxy.example.com \
   --model qwen-image-3.0 --api-key-env MY_PROXY_KEY     # --task video for a video table
 ```
 

@@ -13,7 +13,7 @@ npm install -g @yandy0725/mediagen-cli
 mediagen config show
 
 # 新增一条入口：一个账号（协议 + origin + key）带一张 image 任务表
-mediagen config add my-proxy --api-type qwen \
+mediagen config add my-proxy --api-type openai \
   --base-url https://abc123.cn-beijing.maas.aliyuncs.com \
   --model qwen-image-3.0 --api-key-env DASHSCOPE_API_KEY
 # 视频表加 --task video；再加一个模型只需往 models 里多写一项
@@ -74,7 +74,7 @@ Node >= 18，两个运行时依赖，需要 DashScope 和/或方舟的 API key�
 stdout 上每行打印一个绝对路径；`--json` 打印一个对象：
 
 ```json
-{"ok":true,"partial":false,"files":[{"path":"/tmp/out/dashscope-qwen-image-3-0-20261025-020839-0.png","index":0,"url":"https://dashscope-result.oss-cn-beijing.aliyuncs.com/1.png"}],"errors":[],"usage":{"image_count":1},"request_id":"a1b2c3d4"}
+{"ok":true,"partial":false,"files":[{"path":"/tmp/out/aliyun-qwen-image-3-0-20261025-020839-0.png","index":0,"url":"https://dashscope-result.oss-cn-beijing.aliyuncs.com/1.png"}],"errors":[],"usage":{"image_count":1},"request_id":"a1b2c3d4"}
 ```
 
 `partial: true` 且退出码 `0` 表示部分图片成功、部分失败：磁盘上那些已经付过费了，
@@ -167,8 +167,9 @@ path = "/images/generations"        # 请求打到 .../api/plan/v3/images/genera
 
 key 跟着 provider 实例走，依次来自 `--api-key`、该实例声明的 `api_key_env`、
 `auth.json`。没有任何方言级的默认 key 变量，所以同一方言的两条入口可以各用各的 key。
-key 永远只以打码形式输出。`base_url` 写在文件里（`image generate` 有一次性的 `--base-url` 覆盖），并且会在发请求前校验：对 qwen
-来说公共域名直接就是 `404`，所以种子保留一个会明确失败的占位符。`mediagen config show`
+key 永远只以打码形式输出。`base_url` 写在文件里（`image generate` 有一次性的 `--base-url` 覆盖），并且会在发请求前校验：百炼的
+OpenAI 兼容端点（`compatible-mode`）只在业务空间专属域名上提供，所以种子保留一个会明确失败
+的占位符；而 `dashscope` 协议所用的百炼原生端点，公共域名同样可用。`mediagen config show`
 会打印每个 provider 的任务、模型，以及各自实际会请求的 endpoint。Node >= 24 上设
 `NODE_USE_ENV_PROXY=1` 可走 `HTTP_PROXY`。超时：每次请求取该任务的 `timeout_seconds`
 （默认图片 300 秒、视频 1800 秒），每次下载 120 秒。
@@ -187,7 +188,7 @@ npm run dev -- image generate --help
 ```
 
 `src/cli.ts` 负责 commander 接线和错误到退出码的映射；`src/generate.ts` 是流水线
-（校验 → 解析 → 调用 → 下载 → 汇报）；`src/api/{qwen,ark}.ts` 是
+（校验 → 解析 → 调用 → 下载 → 汇报）；`src/api/{qwen,ark,dashscope}.ts` 是
 `src/types.ts` 中 `DialectAdapter` 接缝背后的方言适配器，周围是 `config.ts`、
 `auth.ts`、`http.ts`、`download.ts`、`output.ts`。
 

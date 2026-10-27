@@ -47,6 +47,9 @@ base_url    = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"
 api_key_env = "DASHSCOPE_API_KEY"
 
 [providers.aliyun.image]
+# Bailian also documents the native protocol for these models; if this endpoint
+# answers 404 on your workspace, switch the line below to api_type = "dashscope"
+# and drop the workspace host in favour of https://dashscope.aliyuncs.com.
 api_type = "openai"
 default  = "qwen-image-3.0"
 models   = ["qwen-image-3.0"]
