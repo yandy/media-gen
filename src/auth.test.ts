@@ -26,7 +26,6 @@ function qwen(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     name: "dashscope",
     api_type: "qwen",
     base_url: "https://dashscope.aliyuncs.com",
-    model: "qwen-image-3.0",
     api_key_env: "DASHSCOPE_API_KEY",
     ...overrides,
   };
@@ -37,7 +36,6 @@ function ark(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     name: "volcengine",
     api_type: "ark",
     base_url: "https://ark.cn-beijing.volces.com",
-    model: "doubao-seedream-5-0-flash-260915",
     api_key_env: "ARK_API_KEY",
     ...overrides,
   };
@@ -53,7 +51,6 @@ function proxy(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     name: "my-proxy",
     api_type: "ark",
     base_url: "https://proxy.example.com",
-    model: "some-model",
     ...overrides,
   };
 }

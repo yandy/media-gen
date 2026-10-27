@@ -7,24 +7,9 @@ import { ConfigError, malformedDocumentMessage, unreadableFileMessage, unwritabl
 import { SEED_CONFIG } from "./providers.js";
 import { shellArg, tomlKey } from "./toml.js";
 import { normalizeHttpBaseUrl } from "./util.js";
-import type { Dialect, ProviderConfig } from "./types.js";
+import { getAdapter } from "./api/index.js";
+import type { Dialect, ProviderConfig, Task, TaskBinding } from "./types.js";
 
-/** One entry from `[providers.<name>]` in config.toml, before validation. */
-export interface ProviderOverride {
-  api_type?: Dialect;
-  base_url?: string;
-  model?: string;
-  api_key_env?: string;
-}
-
-export interface MediagenConfig {
-  /** `""` when config.toml does not set it; resolveProvider() then explains. */
-  default_provider: string;
-  output_dir: string;
-  providers: Record<string, ProviderOverride>;
-}
-
-const PROVIDER_STRING_FIELDS = ["base_url", "model", "api_key_env"] as const;
 
 export function configDir(): string {
   const override = process.env.MEDIAGEN_CLI_CONFIG_DIR;
@@ -118,7 +103,168 @@ export function prepareConfigFile(): void {
   loadConfig();
 }
 
-export function loadConfig(): MediagenConfig {
+/**
+ * config.toml has no flag parser in front of it, so base_url is validated here,
+ * before anything is spent. The qwen example is the workspace-scoped host: the
+ * public host answers the images endpoint with a 404.
+ */
+function resolveBaseUrl(name: string, apiType: Dialect, file: string, value: string): string {
+  const normalized = normalizeHttpBaseUrl(value);
+  if (normalized !== undefined) {
+    const leftover = leftoverApiPrefix(normalized);
+    if (leftover !== undefined) {
+      throw new ConfigError(
+        `provider "${name}" has base_url ${JSON.stringify(value)} under ` +
+          `[providers.${tomlKey(name)}] in ${file}: it ends with the API prefix ` +
+          `"${leftover}", which the ${apiType} dialect appends for you; ` +
+          `set base_url to the origin, e.g. "${stripApiPrefix(normalized) ?? normalized}"`,
+      );
+    }
+    return normalized;
+  }
+
+  const table = `[providers.${tomlKey(name)}] in ${file}`;
+  // The seed ships this placeholder, so it is the likeliest bad value in the
+  // file and deserves its own sentence: "expected X, like X" would only repeat
+  // the user's own text back at them without naming what to do.
+  if (value.includes("<")) {
+    throw new ConfigError(
+      `base_url under ${table} still contains the placeholder ${JSON.stringify(value)}: ` +
+        `replace <workspace-id> with your Bailian workspace id, e.g. ` +
+        `"https://abc123.cn-beijing.maas.aliyuncs.com"`,
+    );
+  }
+
+  const example =
+    apiType === "qwen"
+      ? "https://abc123.cn-beijing.maas.aliyuncs.com"
+      : "https://ark.cn-beijing.volces.com";
+  throw new ConfigError(
+    `provider "${name}" has invalid base_url ${JSON.stringify(value)} under ${table}: ` +
+      `expected an absolute http(s) origin — a gateway prefix is allowed, a version ` +
+      `segment is not — without credentials, query or fragment, e.g. ${example}`,
+  );
+}
+
+function readOptionalString(table: TomlTable, key: string, file: string): string | undefined {
+  const value = table[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new ConfigError(`"${key}" in ${file} must be a string`);
+  }
+  return value;
+}
+
+/**
+ * The API prefix a base_url still carries, but only on a vendor's own host. A
+ * proxy may legitimately live under `/v1` (or anything else), so the check stays
+ * off every host the vendor does not own.
+ */
+export interface OriginIssue {
+  /** The API prefix the value still carries. */
+  prefix: string;
+  /** The origin to use instead. */
+  origin: string;
+}
+
+/**
+ * What is wrong with a base_url that means well but carries the endpoint's own
+ * version prefix. Shared by the file and `--base-url`, so a flag can never skip
+ * a check the file would fail.
+ */
+export function originIssue(value: string): OriginIssue | undefined {
+  const prefix = leftoverApiPrefix(value);
+  if (prefix === undefined) return undefined;
+  return { prefix, origin: stripApiPrefix(value) ?? value };
+}
+
+export function leftoverApiPrefix(baseUrl: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return undefined;
+  }
+  if (!isVendorHost(url.hostname)) return undefined;
+  return API_PREFIXES.find((prefix) => url.pathname === prefix || url.pathname.endsWith(prefix));
+}
+
+function isVendorHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === "ark.cn-beijing.volces.com" ||
+    host === "dashscope.aliyuncs.com" ||
+    host.endsWith(".maas.aliyuncs.com")
+  );
+}
+
+function isDialect(value: unknown): value is Dialect {
+  return value === "qwen" || value === "ark";
+}
+
+function isTable(value: unknown): value is TomlTable {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// ---------------------------------------------------------------------------
+// Task-scoped providers: the shape config.toml uses.
+//
+// A provider is the ledger — protocol, host, credentials. Each task it serves
+// hangs off it by name (`[providers.x.image]`, `[providers.x.video]`) and owns
+// its models, default model and behavior knobs. The endpoint path belongs to
+// the (dialect, task) adapter, so one provider serves every task from one
+// origin.
+// ---------------------------------------------------------------------------
+
+/** One task a provider serves: its models, its default, and how long requests may run. */
+export interface TaskBlock {
+  default?: string;
+  models?: string[];
+  timeout_seconds?: number;
+}
+
+/** One `[providers.<name>]` table, before any value is validated. */
+export interface ProviderEntry {
+  api_type?: Dialect;
+  base_url?: string;
+  api_key_env?: string;
+  tasks: Partial<Record<Task, TaskBlock>>;
+}
+
+export interface TaskConfig {
+  /** `""` when config.toml does not set it; resolveSelection() then explains. */
+  default_provider: string;
+  output_dir: string;
+  providers: Record<string, ProviderEntry>;
+}
+
+export interface SelectionRequest {
+  provider?: string;
+  model?: string;
+  task: Task;
+}
+
+/** The task types a provider table may declare. */
+export const KNOWN_TASKS: readonly Task[] = ["image", "video"];
+
+/** Per-task request budget; video polls for far longer than an image takes to render. */
+export const DEFAULT_TIMEOUT_SECONDS: Record<Task, number> = { image: 300, video: 1800 };
+
+/** Upper bound on `timeout_seconds`: a day, so a typo cannot hang a run for weeks. */
+export const MAX_TIMEOUT_SECONDS = 86_400;
+
+/** Path prefixes the adapters own; a base_url ending with one of these would double it. */
+const API_PREFIXES = ["/api/v3", "/api/v1", "/compatible-mode/v1"] as const;
+
+const PROVIDER_ENTRY_FIELDS = ["api_type", "base_url", "api_key_env"] as const;
+const TASK_BLOCK_FIELDS = ["default", "models", "timeout_seconds"] as const;
+
+/**
+ * Reads config.toml. The file is the only source of truth; nothing is built in. Structure is validated for
+ * every provider here; values are only checked once a provider and task are
+ * actually selected, so one half-filled entry cannot block the others.
+ */
+export function loadConfig(): TaskConfig {
   const file = configPath();
   if (!fs.existsSync(file)) {
     return { default_provider: "", output_dir: process.cwd(), providers: {} };
@@ -138,9 +284,10 @@ export function loadConfig(): MediagenConfig {
     throw new ConfigError(malformedDocumentMessage(file, "TOML", error));
   }
 
-  const providers: MediagenConfig["providers"] = Object.create(
-    null,
-  ) as MediagenConfig["providers"];
+  const providers: Record<string, ProviderEntry> = Object.create(null) as Record<
+    string,
+    ProviderEntry
+  >;
   const rawProviders = parsed.providers;
   if (rawProviders !== undefined) {
     if (!isTable(rawProviders)) {
@@ -150,7 +297,7 @@ export function loadConfig(): MediagenConfig {
       if (!isTable(rawEntry)) {
         throw new ConfigError(`provider "${name}" in ${file} must be a table`);
       }
-      providers[name] = readProviderOverride(name, file, rawEntry);
+      providers[name] = readProviderEntry(name, file, rawEntry);
     }
   }
 
@@ -162,12 +309,169 @@ export function loadConfig(): MediagenConfig {
 }
 
 /**
- * The single resolution path: a provider exists because config.toml declares it,
- * so `api_type`, `base_url` and `model` must all be written down. Only `path` is
- * filled in from the dialect, and `api_key_env` is never inferred — a key
- * belongs to the entry that names it.
+ * One provider table. Unknown keys are errors, not silence: `model` instead of
+ * `models`, or a stray `api_key`, would otherwise look like a working config
+ * while doing nothing.
  */
-export function resolveProvider(name: string, config: MediagenConfig): ProviderConfig {
+function readProviderEntry(name: string, file: string, table: TomlTable): ProviderEntry {
+  const entry: ProviderEntry = { tasks: {} };
+
+  for (const [key, value] of Object.entries(table)) {
+    if (key === "api_type") {
+      if (!isDialect(value)) {
+        throw new ConfigError(
+          `provider "${name}" in ${file} has invalid api_type ${JSON.stringify(value)}; expected "qwen" or "ark"`,
+        );
+      }
+      entry.api_type = value;
+      continue;
+    }
+
+    if (key === "base_url" || key === "api_key_env") {
+      if (typeof value !== "string") {
+        throw new ConfigError(
+          `provider "${name}" in ${file} has invalid ${key}: expected a string`,
+        );
+      }
+      entry[key] = value;
+      continue;
+    }
+
+    if (key === "model") {
+      throw new ConfigError(preTaskShapeMessage(name, file, table, value));
+    }
+
+    if (isTask(key)) {
+      if (!isTable(value)) {
+        throw new ConfigError(
+          `provider "${name}" in ${file} has invalid [providers.${tomlKey(name)}.${key}]: expected a table`,
+        );
+      }
+      entry.tasks[key] = readTaskBlock(name, key, file, value);
+      continue;
+    }
+
+    // A provider table holds three fields and task tables. A key that looks
+    // like a pluralised task (`images`, `videos`) is a typo at the level that
+    // matters; anything else is just an unknown key.
+    const singular = key.endsWith("s") ? key.slice(0, -1) : undefined;
+    if (singular !== undefined && isTask(singular)) {
+      throw new ConfigError(
+        `unknown task "${key}" under [providers.${tomlKey(name)}]; ` +
+          `expected ${KNOWN_TASKS.join(", ")}`,
+      );
+    }
+
+    throw new ConfigError(
+      `unknown key "${key}" under [providers.${tomlKey(name)}]; ` +
+        `expected ${[...PROVIDER_ENTRY_FIELDS, ...KNOWN_TASKS].join(", ")}`,
+    );
+  }
+
+  return entry;
+}
+
+function readTaskBlock(
+  name: string,
+  task: Task,
+  file: string,
+  table: TomlTable,
+): TaskBlock {
+  const block: TaskBlock = {};
+  const where = `[providers.${tomlKey(name)}.${task}]`;
+
+  for (const [key, value] of Object.entries(table)) {
+    if (key === "default") {
+      if (typeof value !== "string") {
+        throw new ConfigError(`default under ${where} must be a string (${file})`);
+      }
+      block.default = value;
+      continue;
+    }
+
+    if (key === "models") {
+      if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+        throw new ConfigError(
+          `models under ${where} must be an array of strings (${file})`,
+        );
+      }
+      block.models = value as string[];
+      continue;
+    }
+
+    if (key === "timeout_seconds") {
+      if (typeof value !== "number") {
+        throw new ConfigError(`timeout_seconds under ${where} must be a number (${file})`);
+      }
+      block.timeout_seconds = value;
+      continue;
+    }
+
+    throw new ConfigError(
+      `unknown key "${key}" under ${where}; expected ${TASK_BLOCK_FIELDS.join(", ")}`,
+    );
+  }
+
+  return block;
+}
+
+/**
+ * The rewrite a pre-task config needs, spelled out. Cost of guessing wrong here
+ * is a user editing three tables from memory, so the message carries the whole
+ * replacement.
+ */
+function preTaskShapeMessage(name: string, file: string, table: TomlTable, model: unknown): string {
+  const id = typeof model === "string" ? model : "<model id>";
+  const apiType = typeof table.api_type === "string" ? table.api_type : "<qwen|ark>";
+  const rawBaseUrl = typeof table.base_url === "string" ? table.base_url : "<origin>";
+  const origin = migrationOrigin(rawBaseUrl);
+  const wasAnnotation = origin === rawBaseUrl ? "" : `   # was "${rawBaseUrl}"`;
+  const key = tomlKey(name);
+
+  const provider = [
+    `[providers.${key}]`,
+    `api_type = "${apiType}"`,
+    `base_url = "${origin}"${wasAnnotation}`,
+  ];
+  if (typeof table.api_key_env === "string") {
+    provider.push(`api_key_env = "${table.api_key_env}"`);
+  }
+
+  // Every line stands on its own so the whole rewrite can be pasted in one go;
+  // previous versions concatenated the parts and glued "]default" together.
+  return [
+    `config.toml still uses the pre-task shape: [providers.${key}] in ${file} sets "model",`,
+    "which now lives under a task table. Rewrite it as:",
+    "",
+    ...provider,
+    "",
+    `[providers.${key}.image]`,
+    `default = "${id}"`,
+    `models  = ["${id}"]`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * The origin a pre-task base_url should become. On a vendor's own host the whole
+ * pathname is dropped: an unrecognised vendor sub-path would survive every local
+ * check and then 404, so copying it verbatim would produce a broken config.
+ */
+function migrationOrigin(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    if (isVendorHost(url.hostname)) return `${url.protocol}//${url.host}`;
+  } catch {
+    // Not a URL at all: keep whatever the user wrote so they can see it.
+  }
+  return stripApiPrefix(baseUrl) ?? baseUrl;
+}
+
+/**
+ * A provider is usable without picking a task: this is the task-free half of
+ * resolution, used by `login` (a key belongs to the provider, not to a task).
+ */
+export function validateProviderShape(name: string, config: TaskConfig): ProviderConfig {
   const file = configPath();
   if (name === "") throw new ConfigError(noProviderSelectedMessage(file));
 
@@ -176,110 +480,183 @@ export function resolveProvider(name: string, config: MediagenConfig): ProviderC
     throw new ConfigError(
       `unknown provider "${name}": no [providers.${tomlKey(name)}] table in ${file}; ` +
         `add one by hand, or run "mediagen config add ${shellArg(name)} ` +
-        `--api-type <qwen|ark> --base-url <url> --model <id>"`,
+        `--api-type <qwen|ark> --base-url <origin> --model <id>"`,
     );
   }
-
-  const apiType = entry.api_type;
-  const declaredBaseUrl = entry.base_url;
-  const model = entry.model;
 
   const missing: string[] = [];
-  if (apiType === undefined) missing.push("api_type");
-  if (declaredBaseUrl === undefined) missing.push("base_url");
-  if (model === undefined) missing.push("model");
-  if (apiType === undefined || declaredBaseUrl === undefined || model === undefined) {
+  if (entry.api_type === undefined) missing.push("api_type");
+  if (entry.base_url === undefined) missing.push("base_url");
+  if (entry.api_type === undefined || entry.base_url === undefined) {
     throw new ConfigError(
-      `provider "${name}" in ${file} is missing required field(s): ${missing.join(", ")}`,
+      `provider "${name}" is missing required field(s): ${missing.join(", ")}; ` +
+        `fix [providers.${tomlKey(name)}] in ${file}`,
     );
   }
 
-  const baseUrl = resolveBaseUrl(name, apiType, file, declaredBaseUrl);
+  if (taskNames(entry).length === 0) {
+    throw new ConfigError(
+      `provider "${name}" declares no task tables; expected ${KNOWN_TASKS.join(", ")}`,
+    );
+  }
 
   const provider: ProviderConfig = {
     name,
-    api_type: apiType,
-    base_url: baseUrl,
-    model,
+    api_type: entry.api_type,
+    base_url: resolveBaseUrl(name, entry.api_type, file, entry.base_url),
   };
   if (entry.api_key_env !== undefined) provider.api_key_env = entry.api_key_env;
   return provider;
 }
 
 /**
- * config.toml has no flag parser in front of it, so base_url is validated here,
- * before anything is spent. The qwen example is the workspace-scoped host: the
- * public host answers the images endpoint with a 404.
+ * The one resolution path for a run: provider, task, model, timeout. Every
+ * check that can fail without spending money happens here, in this order, so
+ * `--model <video model>` on `image generate` never reaches the network.
  */
-function resolveBaseUrl(name: string, apiType: Dialect, file: string, value: string): string {
-  const normalized = normalizeHttpBaseUrl(value);
-  if (normalized !== undefined) return normalized;
+export function resolveSelection(request: SelectionRequest, config: TaskConfig): TaskBinding {
+  const name = selectProviderName(request, config);
+  const entry = config.providers[name];
+  const where = `[providers.${tomlKey(name)}.${request.task}]`;
 
-  const table = `[providers.${tomlKey(name)}] in ${file}`;
-  // The seed ships this placeholder, so it is the likeliest bad value in the
-  // file and deserves its own sentence: "expected X, like X" would only repeat
-  // the user's own text back at them without naming what to do.
-  if (value.includes("<")) {
+  if (entry === undefined) {
+    // Unknown provider and "declares no task" are different mistakes; let the
+    // shape check name the first one.
+    validateProviderShape(name, config);
+  }
+
+  const block = entry?.tasks[request.task];
+  if (block === undefined) {
+    // Shape first: "this provider has no video table" is the useful answer even
+    // when the provider's base_url is still a placeholder.
+    const declared = entry === undefined ? [] : taskNames(entry);
     throw new ConfigError(
-      `base_url under ${table} still contains the placeholder ${JSON.stringify(value)}: ` +
-        `replace <workspace-id> with your Bailian workspace id, e.g. ` +
-        `"https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"`,
+      `provider "${name}" declares no "${request.task}" models; ` +
+        `declared tasks: ${declared.length === 0 ? "(none)" : declared.join(", ")}`,
     );
   }
 
-  const example =
-    apiType === "qwen"
-      ? "https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-      : "https://ark.cn-beijing.volces.com/api/v3";
-  throw new ConfigError(
-    `provider "${name}" has invalid base_url ${JSON.stringify(value)} under ${table}: ` +
-      `expected an absolute http(s) URL ending at the version segment, ` +
-      `without credentials, query or fragment, e.g. ${example}`,
-  );
-}
+  const provider = validateProviderShape(name, config);
 
-function readProviderOverride(
-  name: string,
-  file: string,
-  table: TomlTable,
-): ProviderOverride {
-  const override: ProviderOverride = {};
+  const models = block.models;
+  if (models === undefined) {
+    throw new ConfigError(`${where} is missing required field(s): models`);
+  }
+  if (models.length === 0) {
+    throw new ConfigError(`models must not be empty under ${where}`);
+  }
 
-  const apiType = table.api_type;
-  if (apiType !== undefined) {
-    if (!isDialect(apiType)) {
+  const model = request.model ?? block.default;
+  if (model === undefined) {
+    throw new ConfigError(
+      `${where} sets no default model; pass --model <id> or add default = "<id>"`,
+    );
+  }
+
+  if (!models.includes(model)) {
+    // The id may be real, just declared for another task: saying so is the
+    // difference between "add this line" and "why is my video model rejected".
+    const otherTask = KNOWN_TASKS.find(
+      (task) => task !== request.task && entry?.tasks[task]?.models?.includes(model) === true,
+    );
+    if (otherTask !== undefined) {
       throw new ConfigError(
-        `provider "${name}" in ${file} has invalid api_type ${JSON.stringify(apiType)}; expected "qwen" or "ark"`,
+        `model "${model}" is declared for task "${otherTask}", not "${request.task}"; ` +
+          `run the command that matches its task, or add it under ${where}`,
       );
     }
-    override.api_type = apiType;
-  }
-
-  for (const field of PROVIDER_STRING_FIELDS) {
-    const value = table[field];
-    if (value === undefined) continue;
-    if (typeof value !== "string") {
-      throw new ConfigError(`provider "${name}" in ${file} has invalid ${field}: expected a string`);
+    if (block.default === model) {
+      throw new ConfigError(`default "${model}" is not listed in models under ${where}`);
     }
-    override[field] = value;
+    throw new ConfigError(
+      `unknown model "${model}" for provider "${name}" (task ${request.task}) in ${configPath()}; ` +
+        `add it to models = [...] under ${where}`,
+    );
   }
 
-  return override;
-}
+  // Resolved for its side effect: a task the dialect has no endpoint for must
+  // fail here, before the timeout and long before the network.
+  getAdapter(provider.api_type, request.task);
 
-function readOptionalString(table: TomlTable, key: string, file: string): string | undefined {
-  const value = table[key];
-  if (value === undefined) return undefined;
-  if (typeof value !== "string") {
-    throw new ConfigError(`"${key}" in ${file} must be a string`);
+  const seconds = block.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS[request.task];
+  if (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_TIMEOUT_SECONDS) {
+    throw new ConfigError(
+      `timeout_seconds must be an integer in 1..${MAX_TIMEOUT_SECONDS} under ${where}, ` +
+        `got ${Number.isNaN(seconds) ? "NaN" : String(seconds)}`,
+    );
   }
-  return value;
+
+  return { provider, task: request.task, model, timeout_ms: seconds * 1000 };
 }
 
-function isDialect(value: unknown): value is Dialect {
-  return value === "qwen" || value === "ark";
+/**
+ * `--provider` wins; otherwise `--model` picks the provider that declares it,
+ * which is what "just run my model" means to a user. The lookup reads the raw
+ * tables, so an unrelated provider with an unedited placeholder host cannot
+ * break it.
+ */
+function selectProviderName(request: SelectionRequest, config: TaskConfig): string {
+  if (request.provider !== undefined) return request.provider;
+
+  if (request.model !== undefined) {
+    const hits = Object.entries(config.providers)
+      .filter(([, entry]) => entry.tasks[request.task]?.models?.includes(request.model as string))
+      .map(([name]) => name);
+
+    if (hits.length === 1) return hits[0];
+    if (hits.length > 1) {
+      throw new ConfigError(
+        `model "${request.model}" is declared by providers ${hits
+          .map((name) => `"${name}"`)
+          .join(", ")}; pass --provider`,
+      );
+    }
+
+    // The id may be real, just declared for another task: say so, the way the
+    // --provider path already does, instead of only listing this task's models.
+    const otherTask = KNOWN_TASKS.find(
+      (task) => task !== request.task && knownModels(task, config).includes(request.model as string),
+    );
+    if (otherTask !== undefined) {
+      throw new ConfigError(
+        `model "${request.model}" is declared for task "${otherTask}", not "${request.task}"; ` +
+          `run the command that matches its task`,
+      );
+    }
+
+    const known = knownModels(request.task, config);
+    throw new ConfigError(
+      `unknown model "${request.model}": no provider declares it for task "${request.task}"; ` +
+        `known models for task "${request.task}": ${known.length === 0 ? "(none)" : known.join(", ")}`,
+    );
+  }
+
+  return config.default_provider;
 }
 
-function isTable(value: unknown): value is TomlTable {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function knownModels(task: Task, config: TaskConfig): string[] {
+  const seen: string[] = [];
+  for (const entry of Object.values(config.providers)) {
+    for (const model of entry.tasks[task]?.models ?? []) {
+      if (!seen.includes(model)) seen.push(model);
+    }
+  }
+  return seen;
+}
+
+/** The task tables a provider actually declares, in config order. */
+function taskNames(entry: ProviderEntry): Task[] {
+  return KNOWN_TASKS.filter((task) => entry.tasks[task] !== undefined);
+}
+
+function isTask(value: string): value is Task {
+  return KNOWN_TASKS.includes(value as Task);
+}
+
+/** The origin of a known API prefix, or undefined when the path has none. */
+function stripApiPrefix(value: string): string | undefined {
+  for (const prefix of API_PREFIXES) {
+    if (value.endsWith(prefix)) return value.slice(0, -prefix.length);
+  }
+  return undefined;
 }

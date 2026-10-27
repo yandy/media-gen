@@ -12,10 +12,11 @@ npm install -g @yandy0725/mediagen-cli
 # config show 本身只读。直接编辑这个文件即可
 mediagen config show
 
-# 新增一条入口（同一个方言可以有多条，宿主和模型各自不同）
+# 新增一条入口：一个账号（协议 + origin + key）带一张 image 任务表
 mediagen config add my-proxy --api-type qwen \
-  --base-url https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1 \
+  --base-url https://abc123.cn-beijing.maas.aliyuncs.com \
   --model qwen-image-3.0 --api-key-env DASHSCOPE_API_KEY
+# 视频表加 --task video；再加一个模型只需往 models 里多写一项
 
 mediagen login --provider my-proxy --api-key sk-...
 
@@ -46,9 +47,10 @@ Node >= 18，两个运行时依赖，需要 DashScope 和/或方舟的 API key�
 | `doubao-seedream-5-0-flash-260915` | `--provider volcengine` | 速度：草稿、迭代 |
 | `doubao-seedream-5-0-pro` | `--provider volcengine --model doubao-seedream-5-0-pro` | 最高质量 |
 
-`dashscope` / `volcengine` 是首次运行写进 `config.toml` 的两个实例名，可以随意改，
-也可以照着复制出更多入口。模型 id 是带日期的快照，可以用 `--model` 或 `config.toml`
-覆盖任意一个。`--size`
+`dashscope` / `volcengine` 是首次运行写进 `config.toml` 的两个 provider 名，可以随意改。
+一个模型只有被列在该 provider 的 `image` 表的 `models = [...]` 里才可用；同一家厂商的
+第二个模型是往那张表里加一行 —— 不需要新增 provider。模型 id 是带日期的快照，随版本
+滚动时改 `models`（以及 `default`）即可。`--size`
 接受档位（`2K`）、像素（`2048x2048`）或 `auto`（仅 qwen）；`--n` 接受 1-6 ——
 在 ark 上每张图都是一个独立的付费请求。厂商专属参数（`--negative-prompt` 仅 qwen，
 `--output-format` 仅 ark）会在发出任何请求之前失败。
@@ -77,39 +79,62 @@ stdout 上每行打印一个绝对路径；`--json` 打印一个对象：
 default_provider = "volcengine"
 # output_dir = "./media-output"
 
-[providers.volcengine]
-api_type = "ark"
-base_url = "https://ark.cn-beijing.volces.com/api/v3"
-model = "doubao-seedream-5-0-flash-260915"
+[providers.volcengine]              # 账本：协议、主机、key
+api_type    = "ark"
+base_url    = "https://ark.cn-beijing.volces.com"
 api_key_env = "ARK_API_KEY"
 
+[providers.volcengine.image]        # 能力：一个任务一张表
+default = "doubao-seedream-5-0-flash-260915"
+models  = ["doubao-seedream-5-0-flash-260915", "doubao-seedream-5-0-pro"]
+
+[providers.volcengine.video]
+default = "doubao-seedance-1-0-pro"
+models  = ["doubao-seedance-1-0-pro"]
+
 [providers.dashscope]
-api_type = "qwen"
-base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-model = "qwen-image-3.0"
+api_type    = "qwen"
+base_url    = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"
 api_key_env = "DASHSCOPE_API_KEY"
 
-[providers.my-proxy]              # 同一方言的第二条入口
-api_type = "qwen"
-base_url = "https://proxy.example.com/my-gateway/v1"   # 网关前缀 + 版本段
-model = "qwen-image-3.0"
+[providers.dashscope.image]
+default = "qwen-image-3.0"
+models  = ["qwen-image-3.0"]
+
+[providers.my-proxy]                # 同一协议的第二个账号
+api_type    = "qwen"
+base_url    = "https://proxy.example.com/my-gateway"   # 可带网关前缀
 api_key_env = "MY_PROXY_KEY"
+
+[providers.my-proxy.image]
+default = "qwen-image-3.0"
+models  = ["qwen-image-3.0"]
 ```
 
-一个 provider = 一种 API 方言（`api_type`，取 `qwen` 或 `ark`）+ 一个具体入口
-（`base_url` + `model`）。`api_type`、`base_url`、`model` 三项必填，`api_key_env` 可选。
-**`base_url` 写到版本段为止** —— 端点文件名（`/images/generations`）由方言补上，
-所以把版本段再手写一遍就会变成 `https://host/v1/compatible-mode/v1/...` 这种双重前缀。
+一个 provider = **一个账号**：协议（`api_type`，取 `qwen` 或 `ark`）、一台主机
+（`base_url`）、可选的 `api_key_env`。它能提供的每个任务按名字挂在下面
+（`[providers.<name>.image]`、`[providers.<name>.video]`），表里列允许使用的模型 id，
+以及 `--model` 缺省时用的 `default`。`timeout_seconds` 按任务可选（图片 300、视频 1800）。
+同一家厂商的两个模型是同一个 `models` 列表里的两项，不是两个 provider。
+
+**`base_url` 就是 origin** —— 可以带网关前缀，但不带版本段。版本段属于端点，由方言按任务
+自己拼接（`/api/v3/images/generations`、`/compatible-mode/v1/images/generations`），
+所以换任务只换 path。若在厂商自有域名上仍以 `/api/v3`、`/api/v1` 或
+`/compatible-mode/v1` 结尾，会在发请求前被拒绝，并给出应填的 origin。
 文件是唯一真相：内置没有任何 provider，首次运行只是把上面这份内容写进 `config.toml`
-供你修改。种子里 qwen 那条带 `<workspace-id>` 占位符，所有命令都会在花钱之前拒绝它，
-所以你只需要改这一行。
+供你修改。种子 qwen 那条带 `<workspace-id>` 占位符，只有当它被选中时才会在花钱前报错，
+所以只需要改这一行。
+
+`video` 表能解析、能校验，但还没有任何方言实现视频适配器：视频任务会明确报这一点，
+`config show` 也不会为它打印 endpoint。
 
 key 跟着 provider 实例走，依次来自 `--api-key`、该实例声明的 `api_key_env`、
 `auth.json`。没有任何方言级的默认 key 变量，所以同一方言的两条入口可以各用各的 key。
 key 永远只以打码形式输出。`base_url` 写在文件里（`image generate` 有一次性的 `--base-url` 覆盖），并且会在发请求前校验：对 qwen
 来说公共域名直接就是 `404`，所以种子保留一个会明确失败的占位符。`mediagen config show`
-会打印每条 provider 实际会请求的 endpoint。Node >= 24 上设 `NODE_USE_ENV_PROXY=1` 可走 `HTTP_PROXY`。
-超时：每次请求 300 秒，每次下载 120 秒。
+会打印每个 provider 的任务、模型，以及各自实际会请求的 endpoint。Node >= 24 上设
+`NODE_USE_ENV_PROXY=1` 可走 `HTTP_PROXY`。超时：每次请求取该任务的 `timeout_seconds`
+（默认图片 300 秒、视频 1800 秒），每次下载 120 秒。
 
 在 Agent 里用？`skills/mediagen/SKILL.md` 说明什么时候该用这个 CLI。
 

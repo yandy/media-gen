@@ -19,17 +19,21 @@ import {
   configPath,
   loadConfig,
   noProviderSelectedMessage,
+  DEFAULT_TIMEOUT_SECONDS,
+  KNOWN_TASKS,
   prepareConfigFile,
-  resolveProvider,
+  validateProviderShape,
   writeConfigFile,
-  type MediagenConfig,
-  type ProviderOverride,
+  type ProviderEntry,
+  type TaskConfig,
 } from "./config.js";
 import { ConfigError, UsageError } from "./errors.js";
 import { runGenerate, type GenerateOptions } from "./generate.js";
 import { renderError, renderHuman, renderJson, type RenderedOutput } from "./output.js";
 import { shellArg, tomlBasicString, tomlKey } from "./toml.js";
-import { dialectPath } from "./api/index.js";
+import type { Task } from "./types.js";
+import { adapterPath } from "./api/index.js";
+import { originIssue } from "./config.js";
 import { normalizeHttpBaseUrl } from "./util.js";
 
 /**
@@ -63,14 +67,25 @@ interface KeyStatus {
   masked_key?: string;
 }
 
+interface TaskView {
+  task: string;
+  default?: ConfiguredValue;
+  models?: string[];
+  timeout_seconds?: number;
+  /** True when the value is the task's built-in default, not a configured one. */
+  timeout_seconds_default?: boolean;
+  /** Set when the endpoint cannot be computed, naming which half is missing. */
+  endpoint_note?: string;
+  /** base_url + the adapter path: the URL a request for this task would hit. */
+  endpoint?: string;
+}
+
 interface ProviderView {
   name: string;
   api_type?: ConfiguredValue;
   base_url?: ConfiguredValue;
-  model?: ConfiguredValue;
+  tasks?: TaskView[];
   api_key_env?: ConfiguredValue;
-  /** base_url + the dialect endpoint: the URL a request would actually hit. */
-  endpoint?: string;
   api_key: KeyStatus;
   missing?: string[];
 }
@@ -84,6 +99,7 @@ interface LoginFlags {
 interface ConfigAddFlags {
   apiType?: string;
   baseUrl?: string;
+  task?: string;
   model?: string;
   apiKeyEnv?: string;
   json?: boolean;
@@ -181,12 +197,13 @@ function imageHelpText(command: "generate" | "edit"): string {
   return `
 ${intro}
 
-Models (--provider picks the endpoint declared in config.toml, --model the exact id):
+Models (--provider picks the account, --model the exact id; config.toml decides what is allowed):
   qwen-image-3.0              dashscope   best text rendering (CJK + Latin) and image editing
   doubao-seedream-5-0-flash   volcengine  fastest; use it for drafts and iteration
   doubao-seedream-5-0-pro     volcengine  highest quality; slower and more expensive
-  The provider names above are the two the first run writes into config.toml.
-  Snapshot ids roll forward, so override any of them with --model or in config.toml.
+  A model must be listed in models = [...] under [providers.<name>.image]; the two
+  provider names above are what the first run writes into config.toml, and a second
+  model of the same vendor is one more entry there, not another provider.
 
 Sizes (--size, passed through to the vendor; omit it for the vendor default):
   tiers    1K | 1.5K | 2K | 3K | 4K     ark takes these (its default is 2K)
@@ -218,7 +235,7 @@ ${examples}`;
 
 const IMAGE_OPTION_HELP = {
   provider: "provider name declared in config.toml (default: config default_provider)",
-  model: "model id (default: the provider's configured model)",
+  model: "model id, must be listed in the task's models (default: the task's default)",
   image: "reference image, repeatable; local files are sent as data URLs",
   size: "1K|1.5K|2K|3K|4K, WxH pixels, or auto (qwen only)",
   n: "how many images, 1-6 (ark sends one paid request per image)",
@@ -235,7 +252,7 @@ const IMAGE_OPTION_HELP = {
   outDir: "where to write files (default: config output_dir, else cwd)",
   json: "print one JSON object instead of file paths",
   apiKey: "one-off API key; overrides env and auth.json",
-  baseUrl: "one-off API base URL, up to the version segment, e.g. a proxy",
+  baseUrl: "one-off provider origin, e.g. https://ark.cn-beijing.volces.com (a proxy prefix is allowed)",
 } as const;
 
 /** Adds the flags shared by `image generate` and `image edit`. */
@@ -334,8 +351,9 @@ export function createProgram(options: ProgramOptions = {}): Command {
     .command("add <name>")
     .description("Create a [providers.<name>] table in config.toml")
     .option("--api-type <dialect>", "protocol dialect: qwen or ark")
-    .option("--base-url <url>", "the provider's API base URL, up to the version segment")
-    .option("--model <id>", "the model id this provider defaults to")
+    .option("--base-url <url>", "the provider's origin, e.g. https://ark.cn-beijing.volces.com")
+    .option("--task <image|video>", "which task table to create (default: image)")
+    .option("--model <id>", "the model id this task defaults to")
     .option("--api-key-env <VAR>", "environment variable holding this provider's key")
     .option("--json", "print a JSON result")
     .action(async (name: string, flags: ConfigAddFlags) => {
@@ -423,6 +441,11 @@ function emit(rendered: RenderedOutput): void {
 
 function writeLine(text: string): void {
   process.stdout.write(`${text}\n`);
+}
+
+/** Notes and warnings: stdout carries results only. */
+function writeErrLine(text: string): void {
+  process.stderr.write(`${text}\n`);
 }
 
 function reportError(error: unknown, jsonMode: boolean): number {
@@ -564,7 +587,7 @@ async function runLogin(flags: LoginFlags, deps: CliDeps): Promise<void> {
  * (api_type/base_url/model) lives in config.toml, so an unknown name is a usage
  * error that points at the two ways to create one.
  */
-function assertKnownProvider(name: string, config: MediagenConfig): void {
+function assertKnownProvider(name: string, config: TaskConfig): void {
   if (name === "") throw new UsageError(noProviderSelectedMessage());
   if (!Object.hasOwn(config.providers, name)) {
     throw new UsageError(
@@ -573,10 +596,12 @@ function assertKnownProvider(name: string, config: MediagenConfig): void {
         `(or run "mediagen config add ${shellArg(name)} ...")`,
     );
   }
-  // A provider that exists but cannot resolve is just as unusable as a missing
-  // one, and storing a key for it would look like success and then fail later.
+  // A provider that exists but has no usable shape is just as unusable as a
+  // missing one, and storing a key for it would look like success and then fail
+  // later. This check is task-free on purpose: a video-only provider needs a key
+  // just as much as an image-only one.
   try {
-    resolveProvider(name, config);
+    validateProviderShape(name, config);
   } catch (error) {
     throw new UsageError(error instanceof Error ? error.message : String(error));
   }
@@ -730,6 +755,7 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
     throw new UsageError('--api-type is required: "qwen" or "ark"');
   }
   if (flags.baseUrl === undefined) throw new UsageError("--base-url is required");
+  const task: Task = parseChoice(flags.task, ["image", "video"], "--task") ?? "image";
 
   const model = (flags.model ?? "").trim();
   if (model === "") throw new UsageError("--model is required");
@@ -748,21 +774,22 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
     // True whether the name is a real entry or a table that already nests one
     // (`[providers.a.b]`), which appending would also redefine.
     throw new UsageError(
-      `a [providers.${tomlKey(provider)}] section already exists in ${file}; edit it by hand instead`,
+      `a [providers.${tomlKey(provider)}] section already exists in ${file}; ` +
+        `add a model with one more entry in models = [...] under ` +
+        `[providers.${tomlKey(provider)}.${task}], or edit the table by hand`,
     );
   }
 
   const fields: Record<string, string> = {
     api_type: apiType,
-    base_url: normalizeBaseUrl(flags.baseUrl),
-    model,
+    base_url: originBaseUrl(flags.baseUrl),
   };
   if (apiKeyEnv !== undefined) fields.api_key_env = apiKeyEnv;
 
   const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
   const beforeTable = before.trim() === "" ? undefined : parseToml(before);
-  const after = appendProviderTable(before, provider, fields);
-  assertFaithfulRewrite(beforeTable, after, provider, fields, file);
+  const after = appendProviderTable(before, provider, fields, task, model);
+  assertFaithfulRewrite(beforeTable, after, provider, fields, task, model, file);
   try {
     writeConfigFile(after);
   } catch (error) {
@@ -771,7 +798,9 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
   }
 
   if (flags.json === true) {
-    writeLine(JSON.stringify({ ok: true, provider, config_file: file, fields }));
+    writeLine(
+      JSON.stringify({ ok: true, provider, task, model, config_file: file, fields }),
+    );
     return;
   }
 
@@ -780,7 +809,20 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
     apiKeyEnv === undefined
       ? `run "${loginHint}" to store its key`
       : `set ${shellArg(apiKeyEnv)}, or run "${loginHint}"`;
-  writeLine([`added provider "${provider}" to ${file}`, keyRoute].join("\n"));
+  if (adapterPath(apiType, task) === undefined) {
+    writeErrLine(
+      `note: no dialect has a "${task}" adapter yet; the table is stored and ` +
+        `"config show" will mark it until video lands`,
+    );
+  }
+
+  writeLine(
+    [
+      `added provider "${provider}" to ${file} with a ${task} table defaulting to "${model}"`,
+      `another model of the same provider is one more entry in models = [...] under [providers.${tomlKey(provider)}.${task}]`,
+      keyRoute,
+    ].join("\n"),
+  );
 }
 
 function runConfigShow(flags: { json?: boolean }): void {
@@ -795,10 +837,10 @@ function runConfigShow(flags: { json?: boolean }): void {
     declared.default_provider,
   );
   const outputDir = configuredValue(config.output_dir, declared.output_dir);
-  const views = Object.entries(config.providers).map(([name, override]) => ({
+  const views = Object.entries(config.providers).map(([name, entry]) => ({
     name,
-    apiKeyEnv: override.api_key_env,
-    view: buildProviderView(name, override),
+    apiKeyEnv: entry.api_key_env,
+    view: buildProviderView(name, entry),
   }));
 
   if (flags.json === true) {
@@ -827,17 +869,16 @@ function runConfigShow(flags: { json?: boolean }): void {
 
   if (views.length === 0) {
     lines.push(
-      "  (none; run \"mediagen config add <name> --api-type <qwen|ark> --base-url <url> --model <id>\")",
+      "  (none; run \"mediagen config add <name> --api-type <qwen|ark> --base-url <origin> --model <id>\")",
     );
   }
 
   for (const { name, apiKeyEnv, view } of views) {
     lines.push(`  ${view.name} (dialect ${view.api_type?.value ?? "unknown"})`);
-    for (const field of ["api_type", "base_url", "model", "api_key_env"] as const) {
+    for (const field of ["api_type", "base_url", "api_key_env"] as const) {
       const value = view[field];
       if (value !== undefined) lines.push(`    ${field}: ${show(value)}`);
     }
-    if (view.endpoint !== undefined) lines.push(`    endpoint: ${view.endpoint} (computed)`);
     if (view.missing !== undefined && view.missing.length > 0) {
       lines.push(`    missing: ${view.missing.join(", ")} (required in ${file})`);
     }
@@ -846,6 +887,31 @@ function runConfigShow(flags: { json?: boolean }): void {
         ? `    api_key: ${view.api_key.masked_key} (${describeKeySource(apiKeyEnv, view.api_key.source)})`
         : `    api_key: not set (${missingKeyHint(name, apiKeyEnv)})`,
     );
+
+    for (const taskView of view.tasks ?? []) {
+      lines.push(`    ${taskView.task}:`);
+      if (taskView.default !== undefined) lines.push(`      default: ${show(taskView.default)}`);
+      if (taskView.models !== undefined) {
+        lines.push(`      models: ${taskView.models.join(", ")}`);
+      }
+      if (taskView.timeout_seconds !== undefined) {
+        lines.push(
+          `      timeout_seconds: ${taskView.timeout_seconds}` +
+            (taskView.timeout_seconds_default === true ? " (default)" : ""),
+        );
+      }
+      // A task with no adapter has no endpoint to show: the path belongs to the
+      // adapter, and inventing one here would be a second source of truth.
+      // Naming the missing half matters: "(no adapter yet)" on a task that has
+      // one, but a placeholder host, sends the user looking for the wrong fix.
+      if (taskView.endpoint !== undefined) {
+        lines.push(`      endpoint: ${taskView.endpoint} (computed)`);
+      } else {
+        // Keeps the `endpoint:` prefix so a reader can grep for the one line that
+        // says whether a URL exists at all.
+        lines.push(`      endpoint: (${taskView.endpoint_note ?? "no adapter yet"})`);
+      }
+    }
   }
 
   writeLine(lines.join("\n"));
@@ -860,28 +926,21 @@ function configuredValue(value: string, declared: unknown): ConfiguredValue {
   return declared === undefined ? { value, source: "default" } : { value, source: "config.toml" };
 }
 
-function buildProviderView(name: string, entry: ProviderOverride): ProviderView {
-  const field = (
-    key: "api_type" | "base_url" | "model" | "api_key_env",
-  ): ConfiguredValue | undefined => {
-    const value = entry[key];
-    return value === undefined ? undefined : { value, source: "config.toml" };
-  };
-
+function buildProviderView(name: string, entry: ProviderEntry): ProviderView {
   const missing: string[] = [];
   const fields: Partial<
-    Record<"api_type" | "base_url" | "model" | "api_key_env", ConfiguredValue>
+    Record<"api_type" | "base_url" | "api_key_env", ConfiguredValue>
   > = {};
 
-  for (const key of ["api_type", "base_url", "model", "api_key_env"] as const) {
-    const value = field(key);
+  for (const key of ["api_type", "base_url", "api_key_env"] as const) {
+    const value = entry[key];
     if (value === undefined) {
       // api_key_env is optional everywhere; the rest are required, and missing
-      // them is exactly what resolveProvider() will complain about.
+      // them is exactly what resolveSelection() will complain about.
       if (key !== "api_key_env") missing.push(key);
       continue;
     }
-    fields[key] = value;
+    fields[key] = { value, source: "config.toml" };
   }
 
   const view: ProviderView = {
@@ -890,20 +949,75 @@ function buildProviderView(name: string, entry: ProviderOverride): ProviderView 
     api_key: keyStatus(name, entry.api_key_env),
   };
 
-  // The dialect owns the endpoint, so this is the URL a request would hit. A
+  // The adapter owns the endpoint, so this is the URL a request would hit. A
   // base_url that cannot be parsed gets no endpoint line rather than a throw:
   // config show has to survive a half-written file.
-  const endpointPath = fields.api_type === undefined ? undefined : dialectPath(fields.api_type.value);
-  const base = fields.base_url === undefined ? undefined : normalizeHttpBaseUrl(fields.base_url.value);
-  if (endpointPath !== undefined && base !== undefined) view.endpoint = `${base}${endpointPath}`;
+  const base =
+    fields.base_url === undefined ? undefined : normalizeHttpBaseUrl(fields.base_url.value);
+  const tasks: TaskView[] = KNOWN_TASKS.filter((task) => entry.tasks[task] !== undefined).map(
+    (task) => {
+      const block = entry.tasks[task] ?? {};
+      const taskView: TaskView = { task };
+      if (block.default !== undefined) {
+        taskView.default = { value: block.default, source: "config.toml" };
+      }
+      if (block.models !== undefined) taskView.models = block.models;
+      // The effective budget, marked so a default is never mistaken for a
+      // setting someone wrote.
+      taskView.timeout_seconds = block.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS[task];
+      taskView.timeout_seconds_default = block.timeout_seconds === undefined;
+
+      const path =
+        fields.api_type === undefined ? undefined : adapterPath(fields.api_type.value, task);
+      if (fields.api_type === undefined) {
+        taskView.endpoint_note = "api_type is not set";
+      } else if (path === undefined) {
+        taskView.endpoint_note = "no adapter yet";
+      } else if (base === undefined) {
+        taskView.endpoint_note = "base_url is not a URL yet";
+      } else if (originIssue(base) !== undefined) {
+        // Printing the doubled path here would advertise a URL the validator
+        // refuses, which is the one thing a diagnostic command must not do.
+        taskView.endpoint_note = `base_url still carries "${originIssue(base)?.prefix ?? ""}"`;
+      } else {
+        taskView.endpoint = `${base}${path}`;
+      }
+      return taskView;
+    },
+  );
+  if (tasks.length > 0) view.tasks = tasks;
+  // A provider with no task table cannot serve anything, and `config show` is
+  // where that has to be visible: resolution only says it once you try to use it.
+  if (viewsTaskCount(entry) === 0) missing.push("image or video task table");
   if (missing.length > 0) view.missing = missing;
   return view;
+}
+
+function viewsTaskCount(entry: ProviderEntry): number {
+  return KNOWN_TASKS.filter((task) => entry.tasks[task] !== undefined).length;
 }
 
 function keyStatus(name: string, apiKeyEnv: string | undefined): KeyStatus {
   const resolved = resolveApiKey({ name, api_key_env: apiKeyEnv }, undefined, process.env);
   if (resolved === null) return { configured: false, source: "none" };
   return { configured: true, source: resolved.source, masked_key: maskKey(resolved.key) };
+}
+
+/**
+ * A provider's base_url is an origin: the version segment belongs to the
+ * adapter's path. Rejecting a leftover prefix here keeps `config add` from
+ * writing a file that every later command would refuse to use.
+ */
+function originBaseUrl(value: string): string {
+  const normalized = normalizeBaseUrl(value);
+  const issue = originIssue(normalized);
+  if (issue !== undefined) {
+    throw new UsageError(
+      `invalid --base-url ${JSON.stringify(value)}: it ends with the API prefix "${issue.prefix}", ` +
+        `which the dialect appends for you; pass the origin instead, e.g. "${issue.origin}"`,
+    );
+  }
+  return normalized;
 }
 
 function normalizeBaseUrl(value: string): string {
@@ -918,12 +1032,25 @@ function normalizeBaseUrl(value: string): string {
   return normalized;
 }
 
-/** Appends a complete `[providers.<name>]` table; the caller checked it is absent. */
-function appendProviderTable(text: string, name: string, fields: Record<string, string>): string {
+/**
+ * Appends a complete `[providers.<name>]` table plus one task table; the caller
+ * checked the provider is absent. The pair is written together because a
+ * provider with no task table cannot be used for anything.
+ */
+function appendProviderTable(
+  text: string,
+  name: string,
+  fields: Record<string, string>,
+  task: string,
+  model: string,
+): string {
   const lines = [`[providers.${tomlKey(name)}]`];
   for (const [key, value] of Object.entries(fields)) {
     lines.push(`${key} = ${tomlBasicString(value)}`);
   }
+  lines.push("", `[providers.${tomlKey(name)}.${task}]`);
+  lines.push(`default = ${tomlBasicString(model)}`);
+  lines.push(`models = [${tomlBasicString(model)}]`);
   const base = text.trim() === "" ? "" : text.endsWith("\n") ? `${text}\n` : `${text}\n\n`;
   return `${base}${lines.join("\n")}\n`;
 }
@@ -939,6 +1066,8 @@ function assertFaithfulRewrite(
   after: string,
   name: string,
   expected: Record<string, string>,
+  task: string,
+  model: string,
   file: string,
 ): void {
   function fail(): never {
@@ -958,6 +1087,11 @@ function assertFaithfulRewrite(
   for (const [key, value] of Object.entries(expected)) {
     if (table?.[key] !== value) fail();
   }
+
+  const taskTable = tableAt(parsed, ["providers", name, task]);
+  if (taskTable?.default !== model) fail();
+  const models = taskTable?.models;
+  if (!Array.isArray(models) || models.length !== 1 || models[0] !== model) fail();
   // A brand new provider table is an addition, so nothing needs exempting.
   if (before !== undefined && !isPreserved(before, parsed, [])) fail();
 }

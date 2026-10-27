@@ -1,9 +1,9 @@
 import { ApiError, UsageError } from "../errors.js";
 import type {
-  DialectAdapter,
   ImageRequest,
   ImageResult,
   ParsedResponse,
+  TaskAdapter,
 } from "../types.js";
 
 /**
@@ -167,8 +167,8 @@ export function parseArkResponse(json: unknown, requestId?: string): ParsedRespo
   return parsed;
 }
 
-export const ArkDialect: DialectAdapter = {
-  path: "/images/generations",
+export const ArkDialect: TaskAdapter = {
+  createPath: "/api/v3/images/generations",
   buildRequest: buildArkRequest,
   parseResponse: parseArkResponse,
 };

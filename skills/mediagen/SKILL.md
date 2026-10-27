@@ -32,18 +32,22 @@ then validates before it runs.
 mediagen config show        # prints what resolves; any command creates config.toml on first use
 ```
 
-`base_url` ends at the version segment: the dialect appends the endpoint file name
-(`/images/generations`) itself. qwen needs its workspace-scoped host, and the public
-host 404s, so the seeded `[providers.dashscope].base_url` is a placeholder you must
-finish: replace `<workspace-id>` with your workspace id, keeping the pattern, e.g.
-`https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` (ark's seed is
-usable as written). Until then `image generate` and `image edit` exit 1 without
+`base_url` is the origin: the dialect appends the endpoint path, version segment
+included, per task. qwen needs its workspace-scoped host, and the public host 404s,
+so the seeded `[providers.dashscope].base_url` is a placeholder you must finish:
+replace `<workspace-id>` with your workspace id, e.g.
+`https://abc123.cn-beijing.maas.aliyuncs.com` (ark's seed is usable as written).
+Until then, `image generate` and `image edit` against that provider exit 1 without
 sending anything; `config show`, `config path` and `auth status` still work, and
-`login` exits 2 with the same message. To add another entry without hand-editing:
+`login` exits 2 with the same message.
+
+Each provider holds `models = [...]` per task, and a model that is not listed there is
+refused before anything is sent: add the id to that list instead of creating another
+provider. To add another entry without hand-editing:
 
 ```bash
-mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com/v1 \
-  --model qwen-image-3.0 --api-key-env MY_PROXY_KEY
+mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com \
+  --model qwen-image-3.0 --api-key-env MY_PROXY_KEY     # --task video for a video table
 ```
 
 Then store keys:
@@ -90,10 +94,12 @@ absolute file path per line and warnings go to stderr.
 | seedream 5.0 pro | `--provider volcengine --model doubao-seedream-5-0-pro` | highest quality; slower and more expensive |
 
 `dashscope` / `volcengine` are the two names the first run writes into
-`config.toml`; they are the seed's choices, not built-ins. Vendor ids are dated
-snapshots: override with `--model` (`mediagen config show` prints the id in use).
-`--provider` picks the entry point, and the entry's `api_type` picks the dialect
-and response shape.
+`config.toml`; they are the seed's choices, not built-ins. A model is usable only
+if it is listed in `models = [...]` under that provider's `image` table, so vendor
+ids — dated snapshots that roll forward — are refreshed by editing that list (and
+`default`); `--model` picks among the listed ids, and anything else exits 1 before
+sending. `--provider` picks the account, and the account's `api_type` picks the
+dialect and response shape.
 
 ## Counting images
 

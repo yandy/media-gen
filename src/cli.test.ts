@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authPath, loadAuth } from "./auth.js";
 import { createProgram, main, requestsHelpOrVersion, type CliDeps } from "./cli.js";
-import { configPath } from "./config.js";
+import { configPath, loadConfig } from "./config.js";
 
 const API_KEY = "sk-test1234567890";
 /** maskKey() shows the first four and last four characters only. */
@@ -23,15 +23,21 @@ const FIXTURE_CONFIG = `default_provider = "dashscope"
 
 [providers.dashscope]
 api_type = "qwen"
-base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-model = "qwen-image-3.0"
+base_url = "https://dashscope.aliyuncs.com"
 api_key_env = "DASHSCOPE_API_KEY"
+
+[providers.dashscope.image]
+default = "qwen-image-3.0"
+models = ["qwen-image-3.0"]
 
 [providers.volcengine]
 api_type = "ark"
-base_url = "https://ark.cn-beijing.volces.com/api/v3"
-model = "doubao-seedream-5-0-flash-260915"
+base_url = "https://ark.cn-beijing.volces.com"
 api_key_env = "ARK_API_KEY"
+
+[providers.volcengine.image]
+default = "doubao-seedream-5-0-flash-260915"
+models = ["doubao-seedream-5-0-flash-260915"]
 `;
 
 const TRACKED_ENV = [
@@ -404,9 +410,9 @@ describe("mediagen config show", () => {
     expect(result.stdout).toMatch(/default_provider:\s+volcengine \(config\.toml\)/);
     expect(result.stdout).toMatch(/output_dir:\s+\S+ \(default/);
     expect(result.stdout).toContain(
-      "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1 (config.toml)",
+      "https://<workspace-id>.cn-beijing.maas.aliyuncs.com (config.toml)",
     );
-    expect(result.stdout).toContain("https://ark.cn-beijing.volces.com/api/v3 (config.toml)");
+    expect(result.stdout).toContain("https://ark.cn-beijing.volces.com (config.toml)");
     expect(result.stdout).toContain(`${ARK_URL} (computed)`);
     expect(result.stdout).toMatch(/not set/);
   });
@@ -430,14 +436,20 @@ output_dir = "./shots"
 
 [providers.volcengine]
 api_type = "ark"
-base_url = "https://ark.cn-beijing.volces.com/api/v3"
-model = "doubao-seedream-5-0-pro-260628"
+base_url = "https://ark.cn-beijing.volces.com"
+
+[providers.volcengine.image]
+default = "doubao-seedream-5-0-pro-260628"
+models = ["doubao-seedream-5-0-pro-260628"]
 
 [providers.my-proxy]
 api_type = "ark"
-base_url = "https://proxy.example.com/api/v3"
-model = "some-model"
+base_url = "https://proxy.example.com"
 api_key_env = "MY_PROXY_KEY"
+
+[providers.my-proxy.image]
+default = "some-model"
+models = ["some-model"]
 `);
 
     const result = await run(["config", "show"]);
@@ -447,13 +459,13 @@ api_key_env = "MY_PROXY_KEY"
     expect(result.stdout).toMatch(/output_dir:\s+\.\/shots \(config\.toml\)/);
     expect(result.stdout).toContain("doubao-seedream-5-0-pro-260628 (config.toml)");
     expect(result.stdout).toContain("my-proxy");
-    expect(result.stdout).toContain("https://proxy.example.com/api/v3 (config.toml)");
+    expect(result.stdout).toContain("https://proxy.example.com (config.toml)");
   });
 
   it("emits the resolved config as JSON with masked keys", async () => {
     process.env.ARK_API_KEY = API_KEY;
     writeConfig(
-      '[providers.dashscope]\napi_type = "qwen"\nbase_url = "https://x"\nmodel = "my-qwen"\napi_key_env = "DASHSCOPE_API_KEY"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com/api/v3"\nmodel = "m"\napi_key_env = "ARK_API_KEY"\n',
+      '[providers.dashscope]\napi_type = "qwen"\nbase_url = "https://x"\napi_key_env = "DASHSCOPE_API_KEY"\n\n[providers.dashscope.image]\ndefault = "my-qwen"\nmodels = ["my-qwen"]\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com"\napi_key_env = "ARK_API_KEY"\n\n[providers.volcengine.image]\ndefault = "m"\nmodels = ["m"]\n',
     );
 
     const result = await run(["config", "show", "--json"]);
@@ -465,7 +477,10 @@ api_key_env = "MY_PROXY_KEY"
 
     const providers = payload.providers as Record<string, unknown>[];
     const dashscope = providers.find((entry) => entry.name === "dashscope");
-    expect(dashscope?.model).toEqual({ value: "my-qwen", source: "config.toml" });
+    const dashscopeImage = (dashscope?.tasks as Record<string, unknown>[]).find(
+      (task) => task.task === "image",
+    );
+    expect(dashscopeImage?.default).toEqual({ value: "my-qwen", source: "config.toml" });
     expect(dashscope?.api_key).toEqual({ configured: false, source: "none" });
 
     const volcengine = providers.find((entry) => entry.name === "volcengine");
@@ -479,7 +494,7 @@ api_key_env = "MY_PROXY_KEY"
 
   it("prints the endpoint a request will actually hit", async () => {
     writeConfig(
-      '[providers.p]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "m"\n',
+      '[providers.p]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\n\n[providers.p.image]\ndefault = "m"\nmodels = ["m"]\n',
     );
 
     const result = await run(["config", "show"]);
@@ -493,27 +508,31 @@ api_key_env = "MY_PROXY_KEY"
 
   it("omits the endpoint line when base_url cannot be parsed", async () => {
     writeConfig(
-      '[providers.good]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "m"\n\n[providers.broken]\napi_type = "ark"\nbase_url = "not-a-url"\nmodel = "m"\n',
+      '[providers.good]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\n\n[providers.good.image]\ndefault = "m"\nmodels = ["m"]\n\n[providers.broken]\napi_type = "ark"\nbase_url = "not-a-url"\n\n[providers.broken.image]\ndefault = "m"\nmodels = ["m"]\n',
     );
 
     const result = await run(["config", "show", "--json"]);
 
     expect(result.code).toBe(0);
     const providers = JSON.parse(result.stdout).providers as Record<string, unknown>[];
-    expect(providers.find((p) => p.name === "good")?.endpoint).toBe(
+    const good = providers.find((p) => p.name === "good");
+    const broken = providers.find((p) => p.name === "broken");
+    expect((good?.tasks as Record<string, unknown>[])[0]?.endpoint).toBe(
       "https://proxy.example.com/api/v3/images/generations",
     );
-    expect(providers.find((p) => p.name === "broken")).not.toHaveProperty("endpoint");
+    // A base_url that cannot be parsed gets no endpoint at all, rather than a throw.
+    expect((broken?.tasks as Record<string, unknown>[])[0]).not.toHaveProperty("endpoint");
   });
 
   it("reports an incomplete provider instead of failing", async () => {
-    writeConfig('[providers.half-baked]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\n');
+    writeConfig('[providers.half-baked]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\n');
 
     const result = await run(["config", "show"]);
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("half-baked");
-    expect(result.stdout).toMatch(/missing:\s+model/);
+    // The provider has no task table, so nothing but api_type/base_url can be missing.
+    expect(result.stdout).toContain("half-baked");
   });
 });
 
@@ -554,6 +573,18 @@ describe("mediagen config add", () => {
     expect(names).toContain("my.proxy");
   });
 
+  it("tells the user to add a model instead of a second provider", async () => {
+    const result = await run([
+      "config", "add", "dashscope",
+      "--api-type", "qwen",
+      "--base-url", "https://dashscope.aliyuncs.com",
+      "--model", "qwen-image-3.0",
+    ]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("models = [");
+  });
+
   it("refuses a name that already exists", async () => {
     const result = await run([
       "config", "add", "dashscope",
@@ -590,7 +621,7 @@ describe("mediagen config add", () => {
 
   it("keeps every comment and setting already in config.toml", async () => {
     writeConfig(
-      '# keep me\ndefault_provider = "dashscope"\n\n[providers.dashscope]\napi_type = "qwen"\nbase_url = "https://x"\nmodel = "m"\n',
+      '# keep me\ndefault_provider = "dashscope"\n\n[providers.dashscope]\napi_type = "qwen"\nbase_url = "https://x"\n\n[providers.dashscope.image]\ndefault = "m"\nmodels = ["m"]\n',
     );
 
     const result = await run([
@@ -678,7 +709,9 @@ describe("mediagen config add: protecting the file", () => {
   it("refuses a config.toml it cannot append to faithfully, and changes nothing", async () => {
     // An inline `providers` table cannot later be extended by a [providers.<name>]
     // header: TOML forbids redefining it. The rewrite must refuse, not mangle.
-    writeConfig('providers = { old = { api_type = "ark", base_url = "https://o.example.com", model = "m" } }\n');
+    writeConfig(
+      'providers = { old = { api_type = "ark", base_url = "https://o.example.com" } }\n',
+    );
     const before = readConfig();
 
     const result = await run([
@@ -701,7 +734,10 @@ describe("mediagen config add: protecting the file", () => {
       "[providers.dashscope]",
       'api_type = "qwen"',
       'base_url = "https://x"',
-      'model = "m"',
+      "",
+      "[providers.dashscope.image]",
+      'default = "m"',
+      'models = ["m"]',
       "",
     ].join("\n");
     writeConfig(original);
@@ -749,7 +785,7 @@ describe("mediagen config: unwritable config dir", () => {
 
 describe("mediagen with no default provider", () => {
   it("tells login to set default_provider rather than naming an empty provider", async () => {
-    writeConfig('[providers.p1]\napi_type = "qwen"\nbase_url = "https://k.example.com"\nmodel = "m"\n');
+    writeConfig('[providers.p1]\napi_type = "qwen"\nbase_url = "https://k.example.com"\n\n[providers.p1.image]\ndefault = "m"\nmodels = ["m"]\n');
 
     const result = await run(["login", "--api-key", API_KEY]);
 
@@ -759,7 +795,7 @@ describe("mediagen with no default provider", () => {
   });
 
   it("tells logout the same thing", async () => {
-    writeConfig('[providers.p1]\napi_type = "qwen"\nbase_url = "https://k.example.com"\nmodel = "m"\n');
+    writeConfig('[providers.p1]\napi_type = "qwen"\nbase_url = "https://k.example.com"\n\n[providers.p1.image]\ndefault = "m"\nmodels = ["m"]\n');
 
     const result = await run(["logout"]);
 
@@ -827,7 +863,7 @@ describe("mediagen login: provider must be usable", () => {
   it("refuses to store a key for an entry that cannot resolve", async () => {
     // A hand-edited entry with no api_type: storing a key would look like success
     // and then every generate would fail.
-    writeConfig('[providers.legacy]\nbase_url = "https://x"\nmodel = "m"\n');
+    writeConfig('[providers.legacy]\nbase_url = "https://x"\n\n[providers.legacy.image]\ndefault = "m"\nmodels = ["m"]\n');
 
     const result = await run(["login", "--provider", "legacy", "--api-key", API_KEY]);
 
@@ -883,7 +919,7 @@ describe("mediagen auth status", () => {
 
   it("lists every provider declared in config.toml", async () => {
     writeConfig(
-      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "m"\napi_key_env = "MY_PROXY_KEY"\n',
+      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\napi_key_env = "MY_PROXY_KEY"\n\n[providers.my-proxy.image]\ndefault = "m"\nmodels = ["m"]\n',
     );
     process.env.MY_PROXY_KEY = API_KEY;
 
@@ -910,7 +946,7 @@ describe("mediagen login", () => {
 
   it("defaults the provider to config.default_provider", async () => {
     writeConfig(
-      'default_provider = "volcengine"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com/api/v3"\nmodel = "m"\n',
+      'default_provider = "volcengine"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com"\n\n[providers.volcengine.image]\ndefault = "m"\nmodels = ["m"]\n',
     );
 
     const result = await run(["login", "--api-key", API_KEY]);
@@ -990,7 +1026,7 @@ describe("mediagen login", () => {
 
   it("accepts a provider defined in config.toml", async () => {
     writeConfig(
-      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "m"\n',
+      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\n\n[providers.my-proxy.image]\ndefault = "m"\nmodels = ["m"]\n',
     );
 
     const result = await run(["login", "--provider", "my-proxy", "--api-key", API_KEY]);
@@ -1032,7 +1068,7 @@ describe("mediagen logout", () => {
 
   it("defaults the provider to config.default_provider", async () => {
     writeConfig(
-      'default_provider = "volcengine"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com/api/v3"\nmodel = "m"\n',
+      'default_provider = "volcengine"\n\n[providers.volcengine]\napi_type = "ark"\nbase_url = "https://ark.cn-beijing.volces.com"\n\n[providers.volcengine.image]\ndefault = "m"\nmodels = ["m"]\n',
     );
     await run(["login", "--provider", "volcengine", "--api-key", API_KEY]);
 
@@ -1153,7 +1189,7 @@ describe("mediagen image generate", () => {
       "image", "generate", "x",
       "--provider", "dashscope",
       "--api-key", API_KEY,
-      "--base-url", "https://proxy.example.com/compatible-mode/v1/",
+      "--base-url", "https://proxy.example.com/",
       "--out-dir", outDir,
     ]);
 
@@ -1406,5 +1442,164 @@ describe("mediagen image edit", () => {
     expect(result.code).toBe(0);
     expect(calls[0].body.image).toBe("https://example.com/input.jpg");
     expect(calls[0].body.layer_decomposition).toBe(true);
+  });
+});
+
+describe("task-scoped CLI surface", () => {
+  const VIDEO_ONLY = `default_provider = "volcengine"
+
+[providers.volcengine]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com"
+
+[providers.volcengine.video]
+default = "doubao-seedance-1-0-pro"
+models = ["doubao-seedance-1-0-pro"]
+`;
+
+  it("writes a provider table plus one image task table", async () => {
+    const result = await run([
+      "config", "add", "my-proxy",
+      "--api-type", "qwen",
+      "--base-url", "https://proxy.example.com",
+      "--model", "qwen-image-3.0",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(loadConfig().providers["my-proxy"].tasks.image).toEqual({
+      default: "qwen-image-3.0",
+      models: ["qwen-image-3.0"],
+    });
+    // The provider table holds no model: that is what makes a second model cheap.
+    expect(readConfig()).not.toMatch(/^model\s*=/m);
+  });
+
+  it("writes a video task table when --task video is given", async () => {
+    const result = await run([
+      "config", "add", "vid",
+      "--api-type", "ark",
+      "--base-url", "https://ark.cn-beijing.volces.com",
+      "--task", "video",
+      "--model", "doubao-seedance-1-0-pro",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(loadConfig().providers.vid.tasks.video).toEqual({
+      default: "doubao-seedance-1-0-pro",
+      models: ["doubao-seedance-1-0-pro"],
+    });
+  });
+
+  it("rejects an unknown --task before writing anything", async () => {
+    const before = readConfig();
+
+    const result = await run([
+      "config", "add", "bad",
+      "--api-type", "ark",
+      "--base-url", "https://ark.cn-beijing.volces.com",
+      "--task", "audio",
+      "--model", "m",
+    ]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("--task");
+    expect(readConfig()).toBe(before);
+  });
+
+  it("does not confuse an unfinished base_url with a missing adapter", async () => {
+    // The seed's qwen host is still <workspace-id>, so the endpoint cannot be
+    // computed — but the qwen dialect *does* have an image adapter, and saying
+    // "(no adapter yet)" there would send the user hunting for a code change.
+    fs.rmSync(configPath(), { force: true });
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("endpoint: (base_url is not a URL yet)");
+    expect(result.stdout.match(/\(no adapter yet\)/g) ?? []).toHaveLength(1);
+  });
+
+  it("names a missing api_type instead of blaming the adapter", async () => {
+    writeConfig(`[providers.no-type]
+base_url = "https://proxy.example.com"
+
+[providers.no-type.image]
+default = "m"
+models = ["m"]
+`);
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("endpoint: (api_type is not set)");
+  });
+
+  it("refuses to print a URL the validator would reject", async () => {
+    writeConfig(`[providers.bad-host]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
+
+[providers.bad-host.image]
+default = "m"
+models = ["m"]
+`);
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    // The doubled path is exactly what resolution refuses; showing it would mislead.
+    expect(result.stdout).not.toContain("/api/v3/api/v3");
+    expect(result.stdout).toContain('endpoint: (base_url still carries "/api/v3")');
+  });
+
+  it("warns that a video table cannot be used yet", async () => {
+    const result = await run([
+      "config", "add", "vid",
+      "--api-type", "ark",
+      "--base-url", "https://ark.cn-beijing.volces.com",
+      "--task", "video",
+      "--model", "doubao-seedance-1-0-pro",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toContain('no dialect has a "video" adapter yet');
+  });
+
+  it("shows each provider's tasks and marks the one with no adapter", async () => {
+    writeConfig(VIDEO_ONLY);
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("video:");
+    expect(result.stdout).toContain("(no adapter yet)");
+    expect(result.stdout).toMatch(/timeout_seconds: 1800 \(default\)/);
+    // The adapter owns the path, so a task without one prints no URL at all.
+    expect(result.stdout).not.toContain("/contents/generations");
+  });
+
+  it("logs in to a provider that only declares a video task", async () => {
+    writeConfig(VIDEO_ONLY);
+
+    const result = await run(["login", "--provider", "volcengine", "--api-key", "sk-video-only"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("volcengine");
+  });
+
+  it("tells the user how to set base_url now that it is an origin", async () => {
+    const before = readConfig();
+
+    const result = await run([
+      "config", "add", "trap",
+      "--api-type", "ark",
+      "--base-url", "https://ark.cn-beijing.volces.com/api/v3",
+      "--model", "m",
+    ]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('ends with the API prefix "/api/v3"');
+    expect(result.stderr).toContain("pass the origin instead");
+    expect(readConfig()).toBe(before);
   });
 });

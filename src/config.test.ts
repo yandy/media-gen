@@ -5,11 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configDir,
   configPath,
+  DEFAULT_TIMEOUT_SECONDS,
   ensureConfigFile,
   loadConfig,
+  MAX_TIMEOUT_SECONDS,
   prepareConfigFile,
-  resolveProvider,
-  type MediagenConfig,
+  resolveSelection,
+  validateProviderShape,
+  type TaskConfig,
 } from "./config.js";
 import { ConfigError } from "./errors.js";
 
@@ -25,7 +28,7 @@ function writeConfig(toml: string): void {
   fs.writeFileSync(path.join(tempDir, "config.toml"), toml);
 }
 
-function emptyConfig(): MediagenConfig {
+function emptyConfig(): TaskConfig {
   return { default_provider: "dashscope", output_dir: process.cwd(), providers: {} };
 }
 
@@ -79,7 +82,7 @@ describe("configDir", () => {
   });
 });
 
-describe("loadConfig", () => {
+describe("loadConfig: the file itself", () => {
   it("creates nothing on its own", () => {
     expect(fs.existsSync(configPath())).toBe(false);
 
@@ -106,7 +109,7 @@ describe("loadConfig", () => {
 
     expect(config.default_provider).toBe("");
     expect(config.providers.qwen.base_url).toBe("https://x");
-    expect(config.providers.qwen.model).toBeUndefined();
+    expect(config.providers.qwen.tasks).toEqual({});
   });
 
   it("reads default_provider and output_dir from TOML", () => {
@@ -168,7 +171,7 @@ describe("loadConfig", () => {
 
   it("rejects an unknown api_type at load time, naming provider and value", () => {
     writeConfig(
-      '[providers.my-proxy]\napi_type = "openai"\nbase_url = "https://proxy.example.com"\nmodel = "some-model"\n',
+      '[providers.my-proxy]\napi_type = "openai"\nbase_url = "https://proxy.example.com"\n\n[providers.my-proxy.image]\ndefault = "m"\nmodels = ["m"]\n',
     );
 
     const error = thrownBy(() => loadConfig());
@@ -191,9 +194,19 @@ describe("prepareConfigFile", () => {
     expect(Object.keys(config.providers).sort()).toEqual(["dashscope", "volcengine"]);
     expect(config.providers.volcengine).toEqual({
       api_type: "ark",
-      base_url: "https://ark.cn-beijing.volces.com/api/v3",
-      model: "doubao-seedream-5-0-flash-260915",
+      base_url: "https://ark.cn-beijing.volces.com",
       api_key_env: "ARK_API_KEY",
+      tasks: {
+        // Two models on one provider is the point of the shape: no second entry.
+        image: {
+          default: "doubao-seedream-5-0-flash-260915",
+          models: ["doubao-seedream-5-0-flash-260915", "doubao-seedream-5-0-pro"],
+        },
+        video: {
+          default: "doubao-seedance-1-0-pro",
+          models: ["doubao-seedance-1-0-pro"],
+        },
+      },
     });
   });
 
@@ -202,9 +215,10 @@ describe("prepareConfigFile", () => {
     const text = fs.readFileSync(configPath(), "utf8");
 
     expect(text).toContain('default_provider = "volcengine"');
-    expect(text).toContain('base_url = "https://ark.cn-beijing.volces.com/api/v3"');
-    expect(text).toContain(
-      'base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"',
+    expect(text).toMatch(/^base_url\s*=\s*"https:\/\/ark\.cn-beijing\.volces\.com"$/m);
+    // Only the workspace host needs an edit; everything else is ready to run.
+    expect(text).toMatch(
+      /^base_url\s*=\s*"https:\/\/<workspace-id>\.cn-beijing\.maas\.aliyuncs\.com"$/m,
     );
     expect(text).not.toMatch(/^path\s*=/m);
     expect(text).not.toMatch(/^output_dir\s*=/m);
@@ -279,126 +293,486 @@ describe("ensureConfigFile", () => {
   });
 });
 
-describe("resolveProvider", () => {
-  it("resolves a provider declared in config.toml without inventing a path", () => {
-    writeConfig(
-      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "some-model"\n',
+const TASK_CONFIG = `default_provider = "volcengine"
+
+[providers.volcengine]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com"
+api_key_env = "ARK_API_KEY"
+
+[providers.volcengine.image]
+default = "doubao-seedream-5-0-flash-260915"
+models = ["doubao-seedream-5-0-flash-260915", "doubao-seedream-5-0-pro"]
+
+[providers.volcengine.video]
+default = "doubao-seedance-1-0-pro"
+models = ["doubao-seedance-1-0-pro"]
+
+[providers.dashscope]
+api_type = "qwen"
+base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"
+
+[providers.dashscope.image]
+default = "qwen-image-3.0"
+models = ["qwen-image-3.0"]
+`;
+
+function taskConfig(toml: string = TASK_CONFIG): TaskConfig {
+  writeConfig(toml);
+  return loadConfig();
+}
+
+describe("loadConfig", () => {
+  it("parses providers, tasks and models", () => {
+    const config = taskConfig();
+
+    expect(config.providers.volcengine.tasks.image).toEqual({
+      default: "doubao-seedream-5-0-flash-260915",
+      models: ["doubao-seedream-5-0-flash-260915", "doubao-seedream-5-0-pro"],
+    });
+    expect(config.providers.volcengine.tasks.video?.default).toBe("doubao-seedance-1-0-pro");
+    expect(config.providers.dashscope.api_key_env).toBeUndefined();
+  });
+
+  it("rejects the pre-task shape and shows the rewrite", () => {
+    writeConfig(`default_provider = "volcengine"
+
+[providers.volcengine]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
+model = "doubao-seedream-5-0-flash-260915"
+`);
+
+    const error = thrownBy(() => loadConfig());
+
+    expect(error).toBeInstanceOf(ConfigError);
+    expect(error.message).toContain("still uses the pre-task shape");
+    // The snippet must be paste-ready, not merely present: every line on its own.
+    expect(error.message).toContain(
+      [
+        "[providers.volcengine.image]",
+        'default = "doubao-seedream-5-0-flash-260915"',
+        'models  = ["doubao-seedream-5-0-flash-260915"]',
+      ].join("\n"),
+    );
+  });
+
+  it("reduces a vendor base_url to its origin in the migration snippet", () => {
+    writeConfig(`[providers.volcengine]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+model = "m"
+`);
+
+    const error = thrownBy(() => loadConfig());
+
+    // An unknown vendor sub-path would survive every local check and then 404, so
+    // the paste-ready snippet drops the whole pathname and says what it was.
+    expect(error.message).toContain('base_url = "https://ark.cn-beijing.volces.com"');
+    expect(error.message).toContain(
+      '# was "https://ark.cn-beijing.volces.com/api/plan/v3"',
+    );
+  });
+
+  it("rejects an unknown key in a task table", () => {
+    writeConfig(`[providers.volcengine]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com"
+
+[providers.volcengine.image]
+model = "doubao-seedream-5-0-pro"
+`);
+
+    expect(() => loadConfig()).toThrow(
+      'unknown key "model" under [providers.volcengine.image]; expected default, models, timeout_seconds',
+    );
+  });
+
+  it("rejects an unknown key in a provider table", () => {
+    writeConfig(`[providers.volcengine]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com"
+api_key = "sk-leaked"
+
+[providers.volcengine.image]
+default = "m"
+models = ["m"]
+`);
+
+    expect(() => loadConfig()).toThrow(
+      'unknown key "api_key" under [providers.volcengine]; expected api_type, base_url, api_key_env, image, video',
+    );
+  });
+
+  it("lets a structural error in one provider block every command", () => {
+    writeConfig(`${TASK_CONFIG}
+[providers.broken]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com"
+
+[providers.broken.image]
+modles = ["typo"]
+`);
+
+    // The selected provider is fine, but the file is not: structure is checked
+    // for every provider, exactly so one bad table cannot hide behind another.
+    expect(() => loadConfig()).toThrow(/unknown key "modles"/);
+  });
+
+  it("names the known tasks when a task table is misspelled", () => {
+    writeConfig(`[providers.volcengine]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com"
+
+[providers.volcengine.images]
+default = "m"
+models = ["m"]
+`);
+
+    expect(() => loadConfig()).toThrow(
+      'unknown task "images" under [providers.volcengine]; expected image, video',
+    );
+  });
+
+  it("rejects a timeout_seconds that is not a number", () => {
+    writeConfig(`[providers.p]
+api_type = "ark"
+base_url = "https://proxy.example.com"
+
+[providers.p.image]
+default = "m"
+models = ["m"]
+timeout_seconds = "300"
+`);
+
+    expect(() => loadConfig()).toThrow(
+      "timeout_seconds under [providers.p.image] must be a number",
+    );
+  });
+
+  it("rejects models that is not an array of strings", () => {
+    writeConfig(`[providers.volcengine]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com"
+
+[providers.volcengine.image]
+models = "doubao-seedream-5-0-pro"
+`);
+
+    expect(() => loadConfig()).toThrow(
+      /models under \[providers\.volcengine\.image\] must be an array of strings/,
+    );
+  });
+});
+
+describe("resolveSelection", () => {
+  it("uses the task default when --model is absent", () => {
+    const binding = resolveSelection({ provider: "volcengine", task: "image" }, taskConfig());
+
+    expect(binding.model).toBe("doubao-seedream-5-0-flash-260915");
+    expect(binding.task).toBe("image");
+    expect(binding.provider.base_url).toBe("https://ark.cn-beijing.volces.com");
+  });
+
+  it("lets --model override the default", () => {
+    const binding = resolveSelection(
+      { provider: "volcengine", task: "image", model: "doubao-seedream-5-0-pro" },
+      taskConfig(),
     );
 
-    expect(resolveProvider("my-proxy", loadConfig())).toEqual({
-      name: "my-proxy",
+    expect(binding.model).toBe("doubao-seedream-5-0-pro");
+  });
+
+  it("rejects a model the task does not declare", () => {
+    expect(() =>
+      resolveSelection({ provider: "volcengine", task: "image", model: "nope" }, taskConfig()),
+    ).toThrow(
+      /unknown model "nope".*add it to models .*\[providers\.volcengine\.image\]/,
+    );
+  });
+
+  it("rejects a video model on the image task", () => {
+    expect(() =>
+      resolveSelection(
+        { provider: "volcengine", task: "image", model: "doubao-seedance-1-0-pro" },
+        taskConfig(),
+      ),
+    ).toThrow('model "doubao-seedance-1-0-pro" is declared for task "video", not "image"');
+  });
+
+  it("rejects a task the provider does not declare", () => {
+    expect(() => resolveSelection({ provider: "dashscope", task: "video" }, taskConfig())).toThrow(
+      'provider "dashscope" declares no "video" models; declared tasks: image',
+    );
+  });
+
+  it("rejects a task the dialect has no adapter for", () => {
+    expect(() => resolveSelection({ provider: "volcengine", task: "video" }, taskConfig())).toThrow(
+      'the "ark" dialect has no "video" adapter yet; implemented tasks: image',
+    );
+  });
+
+  it("rejects an empty models list", () => {
+    const config = taskConfig(`[providers.p]
+api_type = "ark"
+base_url = "https://proxy.example.com"
+
+[providers.p.image]
+default = "m"
+models = []
+`);
+
+    expect(() => resolveSelection({ provider: "p", task: "image" }, config)).toThrow(
+      'models must not be empty under [providers.p.image]',
+    );
+  });
+
+  it("rejects a default that is not in models", () => {
+    const config = taskConfig(`[providers.p]
+api_type = "ark"
+base_url = "https://proxy.example.com"
+
+[providers.p.image]
+default = "absent"
+models = ["present"]
+`);
+
+    expect(() => resolveSelection({ provider: "p", task: "image" }, config)).toThrow(
+      'default "absent" is not listed in models under [providers.p.image]',
+    );
+  });
+
+  for (const bad of ["0", "-1", "1.5", "999999"]) {
+    it(`rejects timeout_seconds = ${bad}`, () => {
+      const config = taskConfig(`[providers.p]
+api_type = "ark"
+base_url = "https://proxy.example.com"
+
+[providers.p.image]
+default = "m"
+models = ["m"]
+timeout_seconds = ${bad}
+`);
+
+      expect(() => resolveSelection({ provider: "p", task: "image" }, config)).toThrow(
+        `timeout_seconds must be an integer in 1..${MAX_TIMEOUT_SECONDS}`,
+      );
+    });
+  }
+
+  it("names NaN as NaN instead of null in the timeout error", () => {
+    const config = taskConfig(`[providers.p]
+api_type = "ark"
+base_url = "https://proxy.example.com"
+
+[providers.p.image]
+default = "m"
+models = ["m"]
+timeout_seconds = nan
+`);
+
+    // JSON.stringify(NaN) is "null", which names nothing the user can find.
+    expect(() => resolveSelection({ provider: "p", task: "image" }, config)).toThrow(/got NaN/);
+  });
+
+  it("defaults the timeout to 300s for image", () => {
+    const binding = resolveSelection({ provider: "volcengine", task: "image" }, taskConfig());
+
+    expect(binding.timeout_ms).toBe(DEFAULT_TIMEOUT_SECONDS.image * 1000);
+    expect(binding.timeout_ms).toBe(300_000);
+  });
+
+  it("honours an explicit timeout_seconds", () => {
+    const config = taskConfig(`[providers.p]
+api_type = "ark"
+base_url = "https://proxy.example.com"
+
+[providers.p.image]
+default = "m"
+models = ["m"]
+timeout_seconds = 42
+`);
+
+    expect(resolveSelection({ provider: "p", task: "image" }, config).timeout_ms).toBe(42_000);
+  });
+
+  it("rejects a base_url that still carries the vendor API prefix", () => {
+    const config = taskConfig(`[providers.volcengine]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
+
+[providers.volcengine.image]
+default = "m"
+models = ["m"]
+`);
+
+    expect(() => resolveSelection({ provider: "volcengine", task: "image" }, config)).toThrow(
+      'ends with the API prefix "/api/v3"',
+    );
+    expect(() => resolveSelection({ provider: "volcengine", task: "image" }, config)).toThrow(
+      'set base_url to the origin, e.g. "https://ark.cn-beijing.volces.com"',
+    );
+  });
+
+  it("rejects a qwen base_url that still carries the compatible-mode prefix", () => {
+    const config = taskConfig(`[providers.dashscope]
+api_type = "qwen"
+base_url = "https://abc.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+
+[providers.dashscope.image]
+default = "m"
+models = ["m"]
+`);
+
+    expect(() => resolveSelection({ provider: "dashscope", task: "image" }, config)).toThrow(
+      'ends with the API prefix "/compatible-mode/v1"',
+    );
+  });
+
+  it("describes base_url as an origin when it cannot be parsed at all", () => {
+    const config = taskConfig(`[providers.p]
+api_type = "ark"
+base_url = "ark.cn-beijing.volces.com"
+
+[providers.p.image]
+default = "m"
+models = ["m"]
+`);
+
+    const error = thrownBy(() => resolveSelection({ provider: "p", task: "image" }, config));
+
+    expect(error.message).toContain("origin");
+    expect(error.message).not.toContain("ending at the version segment");
+  });
+
+  it("allows a version-looking prefix on a custom host", () => {
+    const config = taskConfig(`[providers.proxy]
+api_type = "qwen"
+base_url = "https://proxy.example.com/v1"
+
+[providers.proxy.image]
+default = "m"
+models = ["m"]
+`);
+
+    const binding = resolveSelection({ provider: "proxy", task: "image" }, config);
+
+    expect(binding.provider.base_url).toBe("https://proxy.example.com/v1");
+  });
+
+  it("keeps rejecting the seeded placeholder", () => {
+    expect(() => resolveSelection({ provider: "dashscope", task: "image" }, taskConfig())).toThrow(
+      /still contains the placeholder/,
+    );
+  });
+
+  it("finds the provider from --model alone", () => {
+    const binding = resolveSelection(
+      { task: "image", model: "doubao-seedream-5-0-pro" },
+      taskConfig(),
+    );
+
+    expect(binding.provider.name).toBe("volcengine");
+    expect(binding.model).toBe("doubao-seedream-5-0-pro");
+  });
+
+  it("refuses --model declared by two providers", () => {
+    const config = taskConfig(`[providers.a]
+api_type = "ark"
+base_url = "https://a.example.com"
+
+[providers.a.image]
+default = "shared"
+models = ["shared"]
+
+[providers.b]
+api_type = "ark"
+base_url = "https://b.example.com"
+
+[providers.b.image]
+default = "shared"
+models = ["shared"]
+`);
+
+    expect(() => resolveSelection({ task: "image", model: "shared" }, config)).toThrow(
+      'model "shared" is declared by providers "a", "b"; pass --provider',
+    );
+  });
+
+  it("lists known models when --model matches nothing", () => {
+    expect(() => resolveSelection({ task: "image", model: "nope" }, taskConfig())).toThrow(
+      /known models for task "image": .*doubao-seedream-5-0-flash-260915/,
+    );
+  });
+
+  it("says which task a --model id belongs to when it is not declared for this one", () => {
+    expect(() =>
+      resolveSelection({ task: "image", model: "doubao-seedance-1-0-pro" }, taskConfig()),
+    ).toThrow('model "doubao-seedance-1-0-pro" is declared for task "video", not "image"');
+  });
+
+  it("ignores a second provider whose base_url is an unedited placeholder when resolving by --model", () => {
+    // TASK_CONFIG's dashscope entry is exactly that placeholder, and volcengine
+    // declares the model being looked up, so the lookup must not walk into it.
+    const binding = resolveSelection(
+      { task: "image", model: "doubao-seedream-5-0-pro" },
+      taskConfig(),
+    );
+
+    expect(binding.provider.name).toBe("volcengine");
+  });
+
+  it("still reports the placeholder when that provider is the one selected", () => {
+    expect(() => resolveSelection({ provider: "dashscope", task: "image" }, taskConfig())).toThrow(
+      /still contains the placeholder/,
+    );
+  });
+});
+
+describe("validateProviderShape", () => {
+  it("accepts a provider that declares only a video task", () => {
+    const config = taskConfig(`[providers.v]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com"
+
+[providers.v.video]
+default = "vid"
+models = ["vid"]
+`);
+
+    expect(validateProviderShape("v", config)).toEqual({
+      name: "v",
       api_type: "ark",
-      base_url: "https://proxy.example.com/api/v3",
-      model: "some-model",
+      base_url: "https://ark.cn-beijing.volces.com",
     });
   });
 
-  it("throws ConfigError naming the file when a provider omits api_type", () => {
-    writeConfig('[providers.qwen]\nbase_url = "https://x"\nmodel = "m"\n');
+  it("rejects a provider with no task table", () => {
+    const config = taskConfig(`[providers.empty]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com"
+`);
 
-    const error = thrownBy(() => resolveProvider("qwen", loadConfig()));
-
-    expect(error).toBeInstanceOf(ConfigError);
-    expect(error.message).toContain("api_type");
-    expect(error.message).toContain("config.toml");
-  });
-
-  it("throws ConfigError when default_provider is empty", () => {
-    writeConfig("");
-
-    const error = thrownBy(() => resolveProvider("", loadConfig()));
-
-    expect(error).toBeInstanceOf(ConfigError);
-    expect(error.message).toContain("default_provider");
-  });
-
-  it("ignores a leftover path key, which no longer means anything", () => {
-    writeConfig(
-      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "m"\npath = "/custom/images"\n',
+    expect(() => validateProviderShape("empty", config)).toThrow(
+      'provider "empty" declares no task tables; expected image, video',
     );
-
-    expect(resolveProvider("my-proxy", loadConfig())).not.toHaveProperty("path");
   });
 
-  it("throws ConfigError naming api_type when a provider omits it", () => {
-    writeConfig(
-      '[providers.my-proxy]\nbase_url = "https://proxy.example.com"\nmodel = "some-model"\n',
+  it("rejects a provider without api_type", () => {
+    const config = taskConfig(`[providers.half]
+base_url = "https://ark.cn-beijing.volces.com"
+
+[providers.half.image]
+default = "m"
+models = ["m"]
+`);
+
+    expect(() => validateProviderShape("half", config)).toThrow(
+      'provider "half" is missing required field(s): api_type',
     );
-
-    const error = thrownBy(() => resolveProvider("my-proxy", loadConfig()));
-
-    expect(error).toBeInstanceOf(ConfigError);
-    expect(error.message).toContain("api_type");
   });
 
-  it("names every missing field for an incomplete provider", () => {
-    writeConfig("[providers.my-proxy]\n");
-
-    const error = thrownBy(() => resolveProvider("my-proxy", loadConfig()));
-
-    expect(error).toBeInstanceOf(ConfigError);
-    expect(error.message).toContain("api_type");
-    expect(error.message).toContain("base_url");
-    expect(error.message).toContain("model");
-  });
-
-  it("names the seeded placeholder instead of repeating it as an example", () => {
-    writeConfig(
-      '[providers.qwen]\napi_type = "qwen"\nbase_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"\nmodel = "m"\n',
-    );
-
-    const error = thrownBy(() => resolveProvider("qwen", loadConfig()));
-
-    expect(error).toBeInstanceOf(ConfigError);
-    expect(error.message).toContain("base_url");
-    expect(error.message).toContain("placeholder");
-    expect(error.message).toContain("config.toml");
-    // The user's own value is the thing to change: no "expected X, like X".
-    expect(error.message).toContain("https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1");
-    expect(error.message).not.toContain("like https://<workspace-id>");
-  });
-
-  it("rejects a base_url that is not an absolute http(s) URL", () => {
-    writeConfig('[providers.ark]\napi_type = "ark"\nbase_url = "not-a-url"\nmodel = "m"\n');
-
-    const error = thrownBy(() => resolveProvider("ark", loadConfig()));
-
-    expect(error).toBeInstanceOf(ConfigError);
-    expect(error.message).toContain("base_url");
-    expect(error.message).toContain("https://ark.cn-beijing.volces.com/api/v3");
-    expect(error.message).toContain("config.toml");
-  });
-
-  it("strips trailing slashes from base_url", () => {
-    writeConfig(
-      '[providers.p]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3/"\nmodel = "m"\n',
-    );
-
-    expect(resolveProvider("p", loadConfig()).base_url).toBe("https://proxy.example.com/api/v3");
-  });
-
-  it("rejects a base_url carrying a query string or fragment", () => {
-    writeConfig(
-      '[providers.p]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3?x=1"\nmodel = "m"\n',
-    );
-
-    expect(thrownBy(() => resolveProvider("p", loadConfig()))).toBeInstanceOf(ConfigError);
-  });
-
-  it("rejects an empty base_url", () => {
-    writeConfig('[providers.p]\napi_type = "ark"\nbase_url = ""\nmodel = "m"\n');
-
-    const error = thrownBy(() => resolveProvider("p", loadConfig()));
-
-    expect(error).toBeInstanceOf(ConfigError);
-    expect(error.message).toContain("base_url");
-  });
-
-  it("throws ConfigError pointing at config.toml for an unknown provider", () => {
-    const error = thrownBy(() => resolveProvider("nope", emptyConfig()));
-
-    expect(error).toBeInstanceOf(ConfigError);
-    expect(error.message).toContain("config add");
-    expect(error.message).toContain("config.toml");
+  it("rejects an unknown provider by name", () => {
+    expect(() => validateProviderShape("ghost", taskConfig())).toThrow(/unknown provider "ghost"/);
   });
 });

@@ -1,14 +1,12 @@
 import { ApiError } from "./errors.js";
 import { tomlKey } from "./toml.js";
-import { getDialect } from "./api/index.js";
+import { getAdapter } from "./api/index.js";
 import type {
   ImageRequest,
   ParsedResponse,
   ProviderConfig,
+  TaskBinding,
 } from "./types.js";
-
-/** Image generation legitimately takes 10-120s, so allow generous headroom. */
-const REQUEST_TIMEOUT_MS = 300_000;
 
 /** Error bodies are vendor/proxy output of unknown size; keep messages readable. */
 const BODY_EXCERPT_LIMIT = 200;
@@ -17,14 +15,14 @@ const BODY_EXCERPT_LIMIT = 200;
  * The OpenAI-compatible images path is not served on the legacy DashScope host,
  * which answers 404 with an empty body; Bailian serves it only on the caller's
  * workspace-scoped host. The dialect stays OpenAI-compatible, so the fix is a
- * `base_url` and the error has to say so — including the version segment, since
- * the dialect appends only the endpoint file name.
+ * `base_url` and the error has to say so. The origin alone is right: the
+ * dialect's path carries the version segment (`/compatible-mode/v1/...`).
  */
-const QWEN_WORKSPACE_BASE_URL =
-  "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1";
+const QWEN_WORKSPACE_BASE_URL = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com";
 
-export interface CallImageApiParams {
-  provider: ProviderConfig;
+export interface CallApiParams {
+  /** The resolved provider, task, model and timeout this request runs under. */
+  binding: TaskBinding;
   apiKey: string;
   request: ImageRequest;
 }
@@ -147,7 +145,7 @@ function missingQwenEndpointMessage(
   return [
     `${provider.name} API request failed with status ${status}: this endpoint does not exist on ${host}.`,
     `The OpenAI-compatible images API is served only on your workspace-scoped Bailian host, ${QWEN_WORKSPACE_BASE_URL}.`,
-    `Fix it by setting base_url = "${QWEN_WORKSPACE_BASE_URL}" under [providers.${tomlKey(provider.name)}] in config.toml — base_url runs up to the version segment, and the dialect appends the endpoint path — then run the command again.`,
+    `Fix it by setting base_url = "${QWEN_WORKSPACE_BASE_URL}" under [providers.${tomlKey(provider.name)}] in config.toml — base_url is the origin, and the dialect appends the endpoint path, version segment included — then run the command again.`,
   ].join("\n");
 }
 
@@ -189,13 +187,14 @@ async function readResponseText(
   response: Response,
   url: string,
   redact: (text: string) => string,
+  timeoutSeconds: number,
 ): Promise<string> {
   try {
     return await response.text();
   } catch (error) {
     if (isTimeoutError(error)) {
       throw new ApiError(
-        `API request timeout after ${REQUEST_TIMEOUT_MS / 1000}s while reading the response from ${redact(hostOf(url))}`,
+        `API request timeout after ${timeoutSeconds}s while reading the response from ${redact(hostOf(url))}`,
       );
     }
     throw new ApiError(
@@ -205,25 +204,27 @@ async function readResponseText(
 }
 
 /**
- * Sends one image request through the provider's dialect adapter. Transport
+ * Sends one request through the (dialect, task) adapter the binding resolved. Transport
  * failures become `ApiError`s; build/parse errors from the adapter propagate
  * untouched because they already explain what the caller must change. Paid
  * requests are never retried.
  */
-export async function callImageApi(params: CallImageApiParams): Promise<ParsedResponse> {
-  const { provider, apiKey, request } = params;
+export async function callApi(params: CallApiParams): Promise<ParsedResponse> {
+  const { binding, apiKey, request } = params;
+  const provider = binding.provider;
+  const timeoutSeconds = binding.timeout_ms / 1000;
 
   // Resolve the dialect and build the body before any network activity so an
   // invalid flag fails before a paid request is sent. Serializing here, outside
   // the transport try, keeps a payload that cannot be serialized from being
   // misreported as a network failure.
-  const dialect = getDialect(provider.api_type);
-  const body = dialect.buildRequest(request);
+  const adapter = getAdapter(provider.api_type, binding.task);
+  const body = adapter.buildRequest(request);
   const payload = JSON.stringify(body);
   const redact = redactorFor(apiKey);
 
-  const url = `${provider.base_url}${dialect.path}`;
-  const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const url = `${provider.base_url}${adapter.createPath}`;
+  const signal = AbortSignal.timeout(binding.timeout_ms);
 
   let response: Response;
   try {
@@ -239,7 +240,7 @@ export async function callImageApi(params: CallImageApiParams): Promise<ParsedRe
   } catch (error) {
     if (isTimeoutError(error)) {
       throw new ApiError(
-        `${provider.name} API request timeout after ${REQUEST_TIMEOUT_MS / 1000}s (${redact(url)})`,
+        `${provider.name} API request timeout after ${timeoutSeconds}s (${redact(url)})`,
       );
     }
     throw new ApiError(
@@ -247,7 +248,7 @@ export async function callImageApi(params: CallImageApiParams): Promise<ParsedRe
     );
   }
 
-  const text = await readResponseText(response, url, redact);
+  const text = await readResponseText(response, url, redact, timeoutSeconds);
 
   if (!response.ok) {
     throw errorForStatus(text, response.status, provider, redact);
@@ -257,7 +258,7 @@ export async function callImageApi(params: CallImageApiParams): Promise<ParsedRe
   const headerRequestId = response.headers.get("x-request-id");
   const requestId = headerRequestId === null || headerRequestId === "" ? undefined : headerRequestId;
 
-  const parsed = dialect.parseResponse(json, requestId);
+  const parsed = adapter.parseResponse(json, requestId);
   if (parsed.requestId === undefined && requestId !== undefined) {
     parsed.requestId = requestId;
   }

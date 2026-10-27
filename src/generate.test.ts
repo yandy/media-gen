@@ -185,15 +185,21 @@ function writeConfigFor(extra: string): void {
       "",
       "[providers.dashscope]",
       'api_type = "qwen"',
-      'base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"',
-      'model = "qwen-image-3.0"',
+      'base_url = "https://dashscope.aliyuncs.com"',
       'api_key_env = "DASHSCOPE_API_KEY"',
+      "",
+      "[providers.dashscope.image]",
+      'default = "qwen-image-3.0"',
+      'models = ["qwen-image-3.0", "qwen-image-edit-2509"]',
       "",
       "[providers.volcengine]",
       'api_type = "ark"',
-      'base_url = "https://ark.cn-beijing.volces.com/api/v3"',
-      'model = "doubao-seedream-5-0-flash-260915"',
+      'base_url = "https://ark.cn-beijing.volces.com"',
       'api_key_env = "ARK_API_KEY"',
+      "",
+      "[providers.volcengine.image]",
+      'default = "doubao-seedream-5-0-flash-260915"',
+      'models = ["doubao-seedream-5-0-flash-260915"]',
       "",
     ].join("\n"),
   );
@@ -289,6 +295,48 @@ describe("resolveOutDir", () => {
   });
 });
 
+describe("runGenerate: the task binding drives the request", () => {
+  it("uses the task timeout from config", async () => {
+    writeConfig(`
+default_provider = "dashscope"
+
+[providers.dashscope]
+api_type = "qwen"
+base_url = "https://dashscope.aliyuncs.com"
+api_key_env = "DASHSCOPE_API_KEY"
+
+[providers.dashscope.image]
+default = "qwen-image-3.0"
+models = ["qwen-image-3.0"]
+timeout_seconds = 42
+`);
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    stubFetch(() => apiResponse([imageItem("a")]));
+
+    await runGenerate("a cat", options({}), QWEN_ENV);
+
+    expect(timeoutSpy).toHaveBeenCalledWith(42_000);
+  });
+
+  it("resolves the model from the image task's default", async () => {
+    const stub = stubFetch(() => apiResponse([imageItem("a")]));
+
+    await runGenerate("a cat", options({}), QWEN_ENV);
+
+    expect(stub.calls[0]?.body.model).toBe("qwen-image-3.0");
+  });
+
+  it("never fetches when the model is not declared", async () => {
+    const forbidden = stubFetchForbidden();
+
+    await expect(
+      runGenerate("a cat", options({ provider: "dashscope", model: "nope" }), QWEN_ENV),
+    ).rejects.toThrow(/unknown model "nope".*add it to models/);
+
+    expect(forbidden).not.toHaveBeenCalled();
+  });
+});
+
 describe("runGenerate", () => {
   it("sends one qwen request and saves every returned image", async () => {
     const stub = stubFetch(() =>
@@ -367,10 +415,13 @@ describe("runGenerate", () => {
   it("names the provider in the missing-key error", async () => {
     writeConfig(`
 [providers.my-proxy]
-base_url = "https://proxy.example.com/api/v3"
+base_url = "https://proxy.example.com"
 api_type = "ark"
-model = "some-model"
 api_key_env = "MY_PROXY_KEY"
+
+[providers.my-proxy.image]
+default = "some-model"
+models = ["some-model"]
 `);
     const forbidden = stubFetchForbidden();
 
@@ -568,23 +619,43 @@ api_key_env = "MY_PROXY_KEY"
 
     const result = await runGenerate(
       "a cat",
-      options({ baseUrl: "https://proxy.example.com/compatible-mode/v1" }),
+      options({ baseUrl: "https://proxy.example.com" }),
       QWEN_ENV,
     );
 
     expect(stub.calls[0]?.url).toBe("https://proxy.example.com/compatible-mode/v1/images/generations");
-    expect(result.provider.base_url).toBe("https://proxy.example.com/compatible-mode/v1");
+    expect(result.provider.base_url).toBe("https://proxy.example.com");
     // Loading may seed config.toml; the one-off --base-url must not be written into it.
     const written = fs.readFileSync(path.join(configHome, "config.toml"), "utf8");
-    expect(written).not.toMatch(/^base_url = "https:\/\/proxy\.example\.com\/compatible-mode\/v1"$/m);
+    expect(written).not.toMatch(/^base_url = "https:\/\/proxy\.example\.com"$/m);
   });
 
   it("joins a --base-url that carries a trailing slash exactly once", async () => {
     const stub = stubFetch(() => apiResponse([imageItem("proxy")]));
 
-    await runGenerate("a cat", options({ baseUrl: "https://proxy.example.com/compatible-mode/v1/" }), QWEN_ENV);
+    await runGenerate("a cat", options({ baseUrl: "https://proxy.example.com/" }), QWEN_ENV);
 
     expect(stub.calls[0]?.url).toBe("https://proxy.example.com/compatible-mode/v1/images/generations");
+  });
+
+  it("rejects a --base-url that still carries the vendor API prefix", async () => {
+    const forbidden = stubFetchForbidden();
+
+    const error = await rejection(
+      runGenerate(
+        "a cat",
+        options({
+          provider: "volcengine",
+          baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+        }),
+        ARK_ENV,
+      ),
+    );
+
+    expect(error).toBeInstanceOf(UsageError);
+    expect(error.message).toContain('ends with the API prefix "/api/v3"');
+    expect(error.message).toContain("pass the origin instead");
+    expect(forbidden).not.toHaveBeenCalled();
   });
 
   it("rejects a --base-url that is not an absolute http(s) URL before any request", async () => {

@@ -1,7 +1,8 @@
 # base_url 含版本段，端点文件名归方言
 
 日期：2026-10-27
-状态：待评审
+状态：**已被 `2026-10-28-provider-tasks-design.md` 取代** —— `base_url` 回到 origin，
+版本段与 API 前缀改由 `(api_type × 任务)` 的适配器 path 承载；本文件保留作历史记录。
 
 ## 问题
 
