@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareConfigFile } from "./config.js";
 import { ApiError, ConfigError, UsageError } from "./errors.js";
 import {
   resolveOutDir,
@@ -31,6 +32,9 @@ beforeEach(() => {
   configHome = path.join(tempDir, "config");
   outDir = path.join(tempDir, "out");
   process.env.MEDIAGEN_CLI_CONFIG_DIR = configHome;
+  // These tests drive runGenerate() directly, bypassing main()'s bootstrap, so
+  // the seed config has to be written here — exactly what a real run gets.
+  prepareConfigFile();
 });
 
 afterEach(() => {

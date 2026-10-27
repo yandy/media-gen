@@ -98,9 +98,18 @@ export function ensureConfigFile(): void {
   }
 }
 
-export function loadConfig(): MediagenConfig {
+/**
+ * The one place that decides config.toml exists and parses. `main()` calls it
+ * before commander dispatches, so every command sees the same file: created when
+ * absent, validated when present, and a `ConfigError` otherwise. Commands then
+ * read it with `loadConfig()`, which never writes.
+ */
+export function prepareConfigFile(): void {
   ensureConfigFile();
+  loadConfig();
+}
 
+export function loadConfig(): MediagenConfig {
   const file = configPath();
   if (!fs.existsSync(file)) {
     return { default_provider: "", output_dir: process.cwd(), providers: {} };

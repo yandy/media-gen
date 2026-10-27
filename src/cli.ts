@@ -19,6 +19,7 @@ import {
   configPath,
   loadConfig,
   noProviderSelectedMessage,
+  prepareConfigFile,
   resolveProvider,
   writeConfigFile,
   type MediagenConfig,
@@ -365,8 +366,26 @@ export function createProgram(options: ProgramOptions = {}): Command {
 }
 
 /**
+ * `--help` and `--version` must work when config.toml is broken or cannot be
+ * created, so they skip the bootstrap. The scan stops at `--` so a prompt that
+ * happens to read "--help" (`image generate -- --help`) is not mistaken for a
+ * request for help.
+ */
+export function requestsHelpOrVersion(argv: string[]): boolean {
+  for (const arg of argv) {
+    if (arg === "--") return false;
+    if (arg === "-h" || arg === "--help" || arg === "-V" || arg === "--version") return true;
+  }
+  return false;
+}
+
+/**
  * Runs the CLI and returns the exit code without ever calling `process.exit`,
  * so tests can drive it in-process and the bin wrapper owns the exit.
+ *
+ * The bootstrap stage runs before commander dispatches: config.toml is created
+ * when absent and validated when present, so every command sees the same file
+ * and a broken one is reported as a `ConfigError` before any command logic runs.
  */
 export async function main(argv: string[], deps: CliDeps = {}): Promise<number> {
   // Commander's own diagnostics are buffered so that a usage error can still be
@@ -374,6 +393,8 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
   const buffer: string[] = [];
 
   try {
+    if (!requestsHelpOrVersion(argv)) prepareConfigFile();
+
     const program = createProgram({
       deps,
       writeOut: (text) => buffer.push(text),

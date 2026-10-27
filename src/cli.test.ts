@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authPath, loadAuth } from "./auth.js";
-import { createProgram, main, type CliDeps } from "./cli.js";
+import { createProgram, main, requestsHelpOrVersion, type CliDeps } from "./cli.js";
 import { configPath } from "./config.js";
 
 const API_KEY = "sk-test1234567890";
@@ -265,6 +265,65 @@ describe("image help text", () => {
   });
 });
 
+describe("config bootstrap", () => {
+  it("creates config.toml before a command that does not read it runs", async () => {
+    expect(fs.existsSync(configPath())).toBe(false);
+
+    const result = await run(["config", "path"]);
+
+    expect(result.code).toBe(0);
+    expect(fs.existsSync(configPath())).toBe(true);
+  });
+
+  it("fails before dispatch when config.toml is malformed, even for config path", async () => {
+    writeConfig('[providers.qwen\nbase_url = "https://x"\n');
+
+    const result = await run(["config", "path"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("invalid TOML");
+    expect(result.stderr).toContain(configPath());
+  });
+
+  it("still serves --help when config.toml is malformed", async () => {
+    writeConfig('[providers.qwen\nbase_url = "https://x"\n');
+
+    const result = await run(["--help"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Quickstart");
+  });
+
+  it("still serves a subcommand's --help when config.toml is malformed", async () => {
+    writeConfig('[providers.qwen\nbase_url = "https://x"\n');
+
+    const result = await run(["image", "generate", "--help"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Models");
+  });
+});
+
+describe("requestsHelpOrVersion", () => {
+  it("treats the help and version flags as exempt", () => {
+    expect(requestsHelpOrVersion(["--help"])).toBe(true);
+    expect(requestsHelpOrVersion(["-h"])).toBe(true);
+    expect(requestsHelpOrVersion(["image", "generate", "--help"])).toBe(true);
+    expect(requestsHelpOrVersion(["--version"])).toBe(true);
+    expect(requestsHelpOrVersion(["-V"])).toBe(true);
+  });
+
+  it("does not treat a prompt after -- as a help request", () => {
+    expect(requestsHelpOrVersion(["image", "generate", "--", "--help"])).toBe(false);
+  });
+
+  it("is false for ordinary commands", () => {
+    expect(requestsHelpOrVersion(["config", "show"])).toBe(false);
+    expect(requestsHelpOrVersion([])).toBe(false);
+  });
+});
+
 describe("mediagen config path", () => {
   it("prints only the config path", async () => {
     const result = await run(["config", "path"]);
@@ -499,8 +558,10 @@ describe("mediagen config add: value hygiene", () => {
 
     expect(result.code).toBe(2);
     expect(result.stderr).toContain(flag);
-    // A rejected command leaves the filesystem alone, so config.toml is never created.
-    expect(fs.existsSync(configPath())).toBe(false);
+    // The bootstrap creates the seed config before dispatch; a rejected command
+    // must still not add a provider table to it.
+    expect(fs.existsSync(configPath())).toBe(true);
+    expect(readConfig()).not.toContain("[providers.p1]");
   });
 
   it("rejects a blank provider name", async () => {
@@ -510,7 +571,8 @@ describe("mediagen config add: value hygiene", () => {
 
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("name");
-    expect(fs.existsSync(configPath())).toBe(false);
+    // The bootstrap leaves the seed untouched; no nameless table is appended.
+    expect(readConfig()).toContain("[providers.dashscope]");
   });
 
   it("leaves no temporary file behind", async () => {

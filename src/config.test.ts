@@ -7,6 +7,7 @@ import {
   configPath,
   ensureConfigFile,
   loadConfig,
+  prepareConfigFile,
   resolveProvider,
   type MediagenConfig,
 } from "./config.js";
@@ -79,20 +80,14 @@ describe("configDir", () => {
 });
 
 describe("loadConfig", () => {
-  it("writes the seed config on first load and reads it back", () => {
+  it("creates nothing on its own", () => {
     expect(fs.existsSync(configPath())).toBe(false);
 
     const config = loadConfig();
 
-    expect(fs.existsSync(configPath())).toBe(true);
-    expect(config.default_provider).toBe("dashscope");
-    expect(Object.keys(config.providers).sort()).toEqual(["dashscope", "volcengine"]);
-    expect(config.providers.dashscope).toEqual({
-      api_type: "qwen",
-      base_url: "https://dashscope.aliyuncs.com",
-      model: "qwen-image-3.0",
-      api_key_env: "DASHSCOPE_API_KEY",
-    });
+    expect(fs.existsSync(configPath())).toBe(false);
+    expect(config.default_provider).toBe("");
+    expect(config.providers).toEqual({});
   });
 
   it("never overwrites an existing config.toml", () => {
@@ -181,6 +176,33 @@ describe("loadConfig", () => {
     expect(error).toBeInstanceOf(ConfigError);
     expect(error.message).toContain("my-proxy");
     expect(error.message).toContain("openai");
+  });
+});
+
+describe("prepareConfigFile", () => {
+  it("writes the seed config and reads it back", () => {
+    expect(fs.existsSync(configPath())).toBe(false);
+
+    prepareConfigFile();
+
+    expect(fs.existsSync(configPath())).toBe(true);
+    const config = loadConfig();
+    expect(config.default_provider).toBe("dashscope");
+    expect(Object.keys(config.providers).sort()).toEqual(["dashscope", "volcengine"]);
+    expect(config.providers.dashscope).toEqual({
+      api_type: "qwen",
+      base_url: "https://dashscope.aliyuncs.com",
+      model: "qwen-image-3.0",
+      api_key_env: "DASHSCOPE_API_KEY",
+    });
+  });
+
+  it("validates an existing file and leaves its bytes alone", () => {
+    writeConfig('default_provider = "mine"\n');
+
+    prepareConfigFile();
+
+    expect(fs.readFileSync(configPath(), "utf8")).toBe('default_provider = "mine"\n');
   });
 });
 
