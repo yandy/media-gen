@@ -20,3 +20,6 @@ docs/superpowers/plans/
 
 # npm pack output
 *.tgz
+
+# superpowers scratch (ledgers, briefs)
+.superpowers/
