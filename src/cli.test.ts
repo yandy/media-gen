@@ -377,6 +377,97 @@ api_key_env = "MY_PROXY_KEY"
   });
 });
 
+describe("mediagen config add", () => {
+  it("creates a provider table that config show can then resolve", async () => {
+    const result = await run([
+      "config", "add", "my-proxy",
+      "--api-type", "qwen",
+      "--base-url", "https://proxy.example.com",
+      "--model", "qwen-image-3.0",
+      "--api-key-env", "MY_PROXY_KEY",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("my-proxy");
+    const text = readConfig();
+    expect(text).toContain("[providers.my-proxy]");
+    expect(text).toContain('api_key_env = "MY_PROXY_KEY"');
+    // The seed survives the append.
+    expect(text).toContain("[providers.dashscope]");
+  });
+
+  it("quotes a provider name that is not a bare TOML key", async () => {
+    const result = await run([
+      "config", "add", "my.proxy",
+      "--api-type", "ark",
+      "--base-url", "https://p.example.com",
+      "--model", "m",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(readConfig()).toContain('[providers."my.proxy"]');
+    const shown = await run(["config", "show", "--json"]);
+    expect(shown.code).toBe(0);
+    const names = (JSON.parse(shown.stdout) as { providers: { name: string }[] }).providers.map(
+      (entry) => entry.name,
+    );
+    expect(names).toContain("my.proxy");
+  });
+
+  it("refuses a name that already exists", async () => {
+    const result = await run([
+      "config", "add", "dashscope",
+      "--api-type", "qwen",
+      "--base-url", "https://x.example.com",
+      "--model", "m",
+    ]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("dashscope");
+  });
+
+  it("requires --api-type, --base-url and --model", async () => {
+    const result = await run(["config", "add", "my-proxy", "--api-type", "qwen"]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("--base-url");
+  });
+
+  it("rejects a --base-url that is not an http(s) URL and writes nothing", async () => {
+    await run(["config", "show"]);
+    const before = readConfig();
+
+    const result = await run([
+      "config", "add", "my-proxy",
+      "--api-type", "qwen",
+      "--base-url", "proxy.example.com",
+      "--model", "m",
+    ]);
+
+    expect(result.code).toBe(2);
+    expect(readConfig()).toBe(before);
+  });
+
+  it("keeps every comment and setting already in config.toml", async () => {
+    writeConfig(
+      '# keep me\ndefault_provider = "dashscope"\n\n[providers.dashscope]\napi_type = "qwen"\nbase_url = "https://x"\nmodel = "m"\n',
+    );
+
+    const result = await run([
+      "config", "add", "p2",
+      "--api-type", "ark",
+      "--base-url", "https://p2.example.com",
+      "--model", "m2",
+    ]);
+
+    expect(result.code).toBe(0);
+    const text = readConfig();
+    expect(text).toContain("# keep me");
+    expect(text).toContain('default_provider = "dashscope"');
+    expect(text).toContain("[providers.p2]");
+  });
+});
+
 describe("mediagen auth status", () => {
   it("reports every provider as unconfigured with no auth file", async () => {
     const result = await run(["auth", "status"]);

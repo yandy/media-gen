@@ -69,6 +69,15 @@ interface LoginFlags {
   json?: boolean;
 }
 
+interface ConfigAddFlags {
+  apiType?: string;
+  baseUrl?: string;
+  model?: string;
+  path?: string;
+  apiKeyEnv?: string;
+  json?: boolean;
+}
+
 interface ProviderFlags {
   provider?: string;
   json?: boolean;
@@ -307,6 +316,18 @@ export function createProgram(options: ProgramOptions = {}): Command {
     .option("--json", "print a JSON result")
     .action(async (flags: { json?: boolean }) => {
       runConfigPath(flags);
+    });
+  config
+    .command("add <name>")
+    .description("Create a [providers.<name>] table in config.toml")
+    .option("--api-type <dialect>", "protocol dialect: qwen or ark")
+    .option("--base-url <url>", "the provider's API base URL")
+    .option("--model <id>", "the model id this provider defaults to")
+    .option("--path <path>", "override the dialect's default images path")
+    .option("--api-key-env <VAR>", "environment variable holding this provider's key")
+    .option("--json", "print a JSON result")
+    .action(async (name: string, flags: ConfigAddFlags) => {
+      runConfigAdd(name, flags);
     });
 
   const image = program.command("image").description("Generate and edit images");
@@ -710,6 +731,58 @@ function runConfigPath(flags: { json?: boolean }): void {
   writeLine(configPath());
 }
 
+/**
+ * Creates one `[providers.<name>]` table. This is the only place the CLI creates
+ * a provider, and it writes every required field at once: a table that exists but
+ * is missing `base_url` or `model` cannot be produced from the command line.
+ * Anything else — changing a value, removing an entry — is a text edit by hand.
+ */
+function runConfigAdd(name: string, flags: ConfigAddFlags): void {
+  const apiType = parseChoice(flags.apiType, ["qwen", "ark"], "--api-type");
+  if (apiType === undefined) {
+    throw new UsageError('--api-type is required: "qwen" or "ark"');
+  }
+  if (flags.baseUrl === undefined) throw new UsageError("--base-url is required");
+  if ((flags.model ?? "").trim() === "") throw new UsageError("--model is required");
+
+  const file = configPath();
+  // loadConfig() also seeds the file when it is absent, so the append below sees
+  // the same surroundings the user will.
+  const config = loadConfig();
+  if (Object.hasOwn(config.providers, name)) {
+    throw new UsageError(
+      `provider "${name}" already exists in ${file}; edit that table by hand instead`,
+    );
+  }
+
+  const fields: Record<string, string> = {
+    api_type: apiType,
+    base_url: normalizeBaseUrl(flags.baseUrl),
+    model: flags.model ?? "",
+  };
+  if (flags.path !== undefined) fields.path = flags.path;
+  if (flags.apiKeyEnv !== undefined) fields.api_key_env = flags.apiKeyEnv;
+
+  const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  const beforeTable = before.trim() === "" ? undefined : parseToml(before);
+  const after = appendProviderTable(before, name, fields);
+  assertFaithfulRewrite(beforeTable, after, name, fields, file);
+
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(file, after);
+
+  if (flags.json === true) {
+    writeLine(JSON.stringify({ ok: true, provider: name, config_file: file, fields }));
+    return;
+  }
+
+  const keyRoute =
+    flags.apiKeyEnv === undefined
+      ? `run "mediagen login --provider ${name} --api-key ..." to store its key`
+      : `set ${flags.apiKeyEnv}, or run "mediagen login --provider ${name} --api-key ..."`;
+  writeLine([`added provider "${name}" to ${file}`, keyRoute].join("\n"));
+}
+
 function runConfigShow(flags: { json?: boolean }): void {
   const config = loadConfig();
   const file = configPath();
@@ -862,11 +935,21 @@ function setProviderBaseUrl(name: string, baseUrl: string): string {
   const beforeTable = before.trim() === "" ? undefined : parseToml(before);
 
   const after = applyBaseUrl(before, name, baseUrl);
-  assertFaithfulRewrite(beforeTable, after, name, baseUrl, file);
+  assertFaithfulRewrite(beforeTable, after, name, { base_url: baseUrl }, file);
 
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file, after);
   return file;
+}
+
+/** Appends a complete `[providers.<name>]` table; the caller checked it is absent. */
+function appendProviderTable(text: string, name: string, fields: Record<string, string>): string {
+  const lines = [`[providers.${tomlKey(name)}]`];
+  for (const [key, value] of Object.entries(fields)) {
+    lines.push(`${key} = ${tomlBasicString(value)}`);
+  }
+  const base = text.trim() === "" ? "" : text.endsWith("\n") ? `${text}\n` : `${text}\n\n`;
+  return `${base}${lines.join("\n")}\n`;
 }
 
 function applyBaseUrl(text: string, name: string, baseUrl: string): string {
@@ -959,22 +1042,21 @@ function tomlBasicString(value: string): string {
 }
 
 /**
- * Confirms the rewritten TOML still parses, carries the new base_url, and still
- * contains every value the user had. A partial rewrite that silently dropped a
- * setting is worse than no rewrite, so the user is told to edit the file instead.
+ * Confirms the rewritten TOML still parses, carries every field the rewrite
+ * meant to write, and still contains every value the user had. A partial rewrite
+ * that silently dropped a setting is worse than no rewrite, so the user is told
+ * to edit the file instead.
  */
 function assertFaithfulRewrite(
   before: TomlTable | undefined,
   after: string,
   name: string,
-  baseUrl: string,
+  expected: Record<string, string>,
   file: string,
 ): void {
   function fail(): never {
     throw new UsageError(
-      `cannot safely rewrite ${file} to set base_url for provider "${name}"; ` +
-        `edit ${file} by hand and set base_url = ${tomlBasicString(baseUrl)} ` +
-        `under [providers.${tomlKey(name)}]`,
+      `cannot safely rewrite ${file} for provider "${name}"; edit ${file} by hand instead`,
     );
   }
 
@@ -985,10 +1067,12 @@ function assertFaithfulRewrite(
     fail();
   }
 
-  if (tableAt(parsed, ["providers", name])?.base_url !== baseUrl) fail();
-  if (before !== undefined && !isPreserved(before, parsed, ["providers", name, "base_url"])) {
-    fail();
+  const table = tableAt(parsed, ["providers", name]);
+  for (const [key, value] of Object.entries(expected)) {
+    if (table?.[key] !== value) fail();
   }
+  // A brand new provider table is an addition, so nothing needs exempting.
+  if (before !== undefined && !isPreserved(before, parsed, [])) fail();
 }
 
 function tableAt(table: TomlTable, keys: string[]): TomlTable | undefined {
