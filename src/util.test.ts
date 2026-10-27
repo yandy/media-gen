@@ -76,6 +76,14 @@ describe("normalizeHttpBaseUrl", () => {
   });
 });
 
+describe("toImageInput: vendor schemes", () => {
+  it("passes an oss:// reference through untouched", () => {
+    expect(toImageInput("oss://dashscope-instant/2024-07-18/cat.png")).toBe(
+      "oss://dashscope-instant/2024-07-18/cat.png",
+    );
+  });
+});
+
 describe("toImageInput", () => {
   it("passes URLs through untouched", () => {
     expect(toImageInput("https://x/y.png")).toBe("https://x/y.png");

@@ -51,6 +51,9 @@ export function normalizeHttpBaseUrl(value: string): string | undefined {
   return trimmed.replace(/\/+$/, "");
 }
 
+/** Any absolute `scheme://` reference, e.g. `oss://bucket/2024/a.png`. */
+const SCHEME_URL = /^[a-z][a-z0-9+.-]*:\/\//i;
+
 /**
  * Normalizes an image reference into a value both vendors accept: a URL, a
  * `data:` URL, or a local file encoded as `data:<mime>;base64,<data>`.
@@ -58,6 +61,10 @@ export function normalizeHttpBaseUrl(value: string): string | undefined {
 export function toImageInput(value: string): string {
   if (value.startsWith("data:")) return value;
   if (isUrl(value)) return value;
+  // Other schemes are vendor-defined references the CLI must not touch: the
+  // native DashScope protocol accepts `oss://...` handles, and reading them as
+  // local paths would turn a valid reference into ENOENT.
+  if (SCHEME_URL.test(value)) return value;
 
   const extension = path.extname(value).toLowerCase();
   const mime = IMAGE_MIME_TYPES[extension];

@@ -144,7 +144,7 @@ describe("buildArkRequest", () => {
   });
 
   for (const [field, overrides] of qwenOnlyFields) {
-    it(`rejects the qwen-only ${field} field`, () => {
+    it(`rejects the openai-dialect ${field} field`, () => {
       const error = thrownBy(() => buildArkRequest(request(overrides)));
 
       expect(error).toBeInstanceOf(UsageError);

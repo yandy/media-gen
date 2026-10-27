@@ -211,15 +211,15 @@ describe("validateSize", () => {
     ["1K", "ark"],
     ["1.5K", "ark"],
     ["2K", "ark"],
-    ["3K", "qwen"],
-    ["4K", "qwen"],
+    ["3K", "openai"],
+    ["4K", "openai"],
     ["2k", "ark"],
-    ["1.5k", "qwen"],
+    ["1.5k", "openai"],
     ["1728x2160", "ark"],
-    ["1024x1024", "qwen"],
+    ["1024x1024", "openai"],
     ["100x100", "ark"],
-    ["auto", "qwen"],
-    ["AUTO", "qwen"],
+    ["auto", "openai"],
+    ["AUTO", "openai"],
   ];
 
   it.each(valid)("accepts %s for the %s dialect", (size, apiType) => {
@@ -229,16 +229,16 @@ describe("validateSize", () => {
   const invalid: Array<[string, Dialect]> = [
     ["auto", "ark"],
     ["huge", "ark"],
-    ["100*100", "qwen"],
+    ["100*100", "openai"],
     ["1024X1024", "ark"],
-    ["0x100", "qwen"],
-    ["100x0", "qwen"],
+    ["0x100", "openai"],
+    ["100x0", "openai"],
     ["1024x", "ark"],
     ["x1024", "ark"],
-    ["", "qwen"],
+    ["", "openai"],
     ["2KK", "ark"],
     ["1024x1024x1024", "ark"],
-    ["1024 x 1024", "qwen"],
+    ["1024 x 1024", "openai"],
   ];
 
   it.each(invalid)("rejects %s for the %s dialect", (size, apiType) => {
@@ -256,17 +256,17 @@ describe("validateSize", () => {
     expect(error.message).toContain('invalid --size ""');
   });
 
-  it("mentions that auto is qwen-only when an ark provider asks for it", () => {
+  it("mentions that auto is openai-only when an ark provider asks for it", () => {
     const error = thrownBy(() => validateSize("auto", "ark"));
 
-    expect(error.message).toContain("qwen-only");
+    expect(error.message).toContain("openai-only");
   });
 
   it("lists auto as an accepted form for qwen", () => {
-    const error = thrownBy(() => validateSize("nope", "qwen"));
+    const error = thrownBy(() => validateSize("nope", "openai"));
 
     expect(error.message).toContain('"auto"');
-    expect(error.message).not.toContain("qwen-only");
+    expect(error.message).not.toContain("openai-dialect");
   });
 });
 
@@ -335,6 +335,111 @@ timeout_seconds = 42
     ).rejects.toThrow(/unknown model "nope".*add it to models/);
 
     expect(forbidden).not.toHaveBeenCalled();
+  });
+});
+
+describe("runGenerate: the dashscope dialect end to end", () => {
+  const ENV = { GW_KEY: "sk-gw-1234" };
+
+  beforeEach(() => {
+    writeConfig(`
+default_provider = "gw"
+
+[providers.gw]
+base_url = "https://gw.example.com"
+api_key_env = "GW_KEY"
+
+[providers.gw.image]
+api_type = "dashscope"
+path = "/v1/images/generations"
+default = "qwen-image-2.0-pro"
+models = ["qwen-image-2.0-pro"]
+`);
+  });
+
+  it("posts the native body to the task's path and saves the returned image", async () => {
+    const stub = stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            output: {
+              choices: [
+                { finish_reason: "stop", message: { role: "assistant", content: [{ image: imageUrl("fox") }] } },
+              ],
+            },
+            usage: { image_count: 1, width: 1024, height: 1024 },
+            request_id: "req-native-1",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const result = await runGenerate("a red fox", options({ size: "1024x1024" }), ENV);
+
+    expect(stub.calls).toHaveLength(1);
+    expect(stub.calls[0]?.url).toBe("https://gw.example.com/v1/images/generations");
+    expect(stub.calls[0]?.body).toEqual({
+      model: "qwen-image-2.0-pro",
+      input: { messages: [{ role: "user", content: [{ text: "a red fox" }] }] },
+      parameters: { n: 1, size: "1024*1024" },
+    });
+    expect(stub.downloads).toEqual([imageUrl("fox")]);
+    expect(result.saved).toHaveLength(1);
+    expect(fs.readFileSync(result.saved[0]?.path ?? "")).toEqual(PNG_BYTES);
+    expect(result.response.requestId).toBe("req-native-1");
+    expect(result.response.usage).toEqual({ image_count: 1, width: 1024, height: 1024 });
+  });
+
+  it("defaults to the native endpoint when the task declares no path", async () => {
+    writeConfig(`
+default_provider = "gw"
+
+[providers.gw]
+base_url = "https://gw.example.com"
+api_key_env = "GW_KEY"
+
+[providers.gw.image]
+api_type = "dashscope"
+default = "qwen-image-2.0-pro"
+models = ["qwen-image-2.0-pro"]
+`);
+    const stub = stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            output: { choices: [{ message: { content: [{ image: imageUrl("fox") }] } }] },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    await runGenerate("a red fox", options(), ENV);
+
+    expect(stub.calls[0]?.url).toBe(
+      "https://gw.example.com/api/v1/services/aigc/multimodal-generation/generation",
+    );
+  });
+
+  it("sends an input image before the prompt text", async () => {
+    const stub = stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            output: { choices: [{ message: { content: [{ image: imageUrl("fox") }] } }] },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const source = path.join(tempDir, "source.png");
+    fs.writeFileSync(source, PNG_BYTES);
+    await runGenerate("make it sunset", options({ images: [source] }), ENV);
+
+    const body = stub.calls[0]?.body as { input: { messages: { content: unknown[] }[] } };
+    const content = body.input.messages[0]?.content ?? [];
+    expect(content).toHaveLength(2);
+    expect(String((content[0] as { image: string }).image)).toMatch(/^data:image\/png;base64,/);
+    expect(content[1]).toEqual({ text: "make it sunset" });
   });
 });
 
@@ -519,7 +624,7 @@ models = ["some-model"]
     expect(forbidden).not.toHaveBeenCalled();
   });
 
-  it("rejects a qwen-only flag on an ark provider before any request", async () => {
+  it("rejects an openai-dialect flag on an ark provider before any request", async () => {
     const forbidden = stubFetchForbidden();
 
     const error = await rejection(
@@ -1069,5 +1174,19 @@ models = ["some-model"]
         { code: "SensitiveContentDetected", message: "content blocked" },
       ]);
     });
+  });
+});
+
+describe("validateSize for the dashscope dialect", () => {
+  it("rejects a size tier", () => {
+    expect(() => validateSize("2K", "dashscope")).toThrow(/accepts only a WxH pixel pair/);
+  });
+
+  it("rejects auto", () => {
+    expect(() => validateSize("auto", "dashscope")).toThrow(/accepts only a WxH pixel pair/);
+  });
+
+  it("accepts a pixel pair", () => {
+    expect(() => validateSize("2048x2048", "dashscope")).not.toThrow();
   });
 });

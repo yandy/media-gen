@@ -7,8 +7,8 @@ import type {
 } from "../types.js";
 
 /**
- * Fields that only the ark dialect accepts. Receiving one on the qwen dialect
- * means the caller selected a vendor-specific flag for the wrong provider;
+ * Fields that only the ark dialect accepts. Receiving one on the openai dialect
+ * means the caller selected a vendor-specific flag for the wrong protocol;
  * fail loudly rather than dropping it from the wire body.
  */
 const ARK_ONLY_FIELDS = [
@@ -31,7 +31,7 @@ export function buildQwenRequest(req: ImageRequest): Record<string, unknown> {
   for (const field of ARK_ONLY_FIELDS) {
     if (req[field] !== undefined) {
       throw new UsageError(
-        `option "${field}" is ark-only and is not supported by the qwen dialect; remove it or use an ark provider`,
+        `option "${field}" is ark-only and is not supported by the openai dialect; remove it or set api_type = "ark" on this task`,
       );
     }
   }
@@ -72,34 +72,34 @@ export function buildQwenRequest(req: ImageRequest): Record<string, unknown> {
  */
 export function parseQwenResponse(json: unknown, requestId?: string): ParsedResponse {
   if (!isRecord(json)) {
-    throw new ApiError("qwen API returned a response that is not a JSON object");
+    throw new ApiError("openai API returned a response that is not a JSON object");
   }
 
   if ("error" in json && json.error !== undefined && json.error !== null) {
     if (!isRecord(json.error)) {
-      throw new ApiError("qwen API returned an unrecognized error body");
+      throw new ApiError("openai API returned an unrecognized error body");
     }
     const code = typeof json.error.code === "string" ? json.error.code : undefined;
     const message =
       typeof json.error.message === "string" && json.error.message.trim() !== ""
         ? json.error.message
-        : "qwen API request failed";
+        : "openai API request failed";
     throw new ApiError(message, code);
   }
 
   if (!("data" in json) || json.data === undefined) {
-    throw new ApiError("qwen API response is missing the data array");
+    throw new ApiError("openai API response is missing the data array");
   }
   if (!Array.isArray(json.data)) {
-    throw new ApiError("qwen API response data is not an array");
+    throw new ApiError("openai API response data is not an array");
   }
   if (json.data.length === 0) {
-    throw new ApiError("qwen API returned no images");
+    throw new ApiError("openai API returned no images");
   }
 
   const images: ImageResult[] = json.data.map((entry, index) => {
     if (!isRecord(entry) || typeof entry.url !== "string" || entry.url === "") {
-      throw new ApiError(`qwen API response image ${index + 1} is missing a url`);
+      throw new ApiError(`openai API response image ${index + 1} is missing a url`);
     }
     return { url: entry.url };
   });

@@ -15,15 +15,27 @@ function thrownBy(action: () => unknown): Error {
   throw new Error("expected the action to throw, but it returned normally");
 }
 
+describe("the dashscope dialect", () => {
+  it("serves image from the native multimodal endpoint", () => {
+    expect(getAdapter("dashscope", "image").createPath).toBe(
+      "/api/v1/services/aigc/multimodal-generation/generation",
+    );
+  });
+
+  it("has no video adapter yet", () => {
+    expect(() => getAdapter("dashscope", "video")).toThrow(/no "video" adapter yet/);
+  });
+});
+
 describe("getAdapter", () => {
   it("returns the dialect's image adapter", () => {
-    expect(getAdapter("qwen", "image")).toBe(QwenDialect);
+    expect(getAdapter("openai", "image")).toBe(QwenDialect);
     expect(getAdapter("ark", "image")).toBe(ArkDialect);
   });
 
   it("gives each image adapter a path that starts at the origin's version segment", () => {
     expect(getAdapter("ark", "image").createPath).toBe("/api/v3/images/generations");
-    expect(getAdapter("qwen", "image").createPath).toBe(
+    expect(getAdapter("openai", "image").createPath).toBe(
       "/compatible-mode/v1/images/generations",
     );
   });
@@ -42,7 +54,7 @@ describe("getAdapter", () => {
 
     expect(error).toBeInstanceOf(ConfigError);
     expect(error.message).toContain("nope");
-    expect(error.message).toContain("qwen");
+    expect(error.message).toContain("openai");
     expect(error.message).toContain("ark");
   });
 
@@ -59,7 +71,7 @@ describe("getAdapter", () => {
 describe("adapterPath", () => {
   it("returns the path for an implemented dialect and task", () => {
     expect(adapterPath("ark", "image")).toBe("/api/v3/images/generations");
-    expect(adapterPath("qwen", "image")).toBe("/compatible-mode/v1/images/generations");
+    expect(adapterPath("openai", "image")).toBe("/compatible-mode/v1/images/generations");
   });
 
   it("returns undefined instead of throwing, so a half-written config can still be shown", () => {

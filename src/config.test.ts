@@ -171,14 +171,14 @@ describe("loadConfig: the file itself", () => {
 
   it("rejects an unknown api_type at load time, naming provider and value", () => {
     writeConfig(
-      '[providers.my-proxy]\napi_type = "openai"\nbase_url = "https://proxy.example.com"\n\n[providers.my-proxy.image]\ndefault = "m"\nmodels = ["m"]\n',
+      '[providers.my-proxy]\napi_type = "gemini"\nbase_url = "https://proxy.example.com"\n\n[providers.my-proxy.image]\ndefault = "m"\nmodels = ["m"]\n',
     );
 
     const error = thrownBy(() => loadConfig());
 
     expect(error).toBeInstanceOf(ConfigError);
     expect(error.message).toContain("my-proxy");
-    expect(error.message).toContain("openai");
+    expect(error.message).toContain("gemini");
   });
 });
 
@@ -191,18 +191,20 @@ describe("prepareConfigFile", () => {
     expect(fs.existsSync(configPath())).toBe(true);
     const config = loadConfig();
     expect(config.default_provider).toBe("volcengine");
-    expect(Object.keys(config.providers).sort()).toEqual(["dashscope", "volcengine"]);
+    expect(Object.keys(config.providers).sort()).toEqual(["aliyun", "volcengine"]);
     expect(config.providers.volcengine).toEqual({
-      api_type: "ark",
       base_url: "https://ark.cn-beijing.volces.com",
       api_key_env: "ARK_API_KEY",
       tasks: {
         // Two models on one provider is the point of the shape: no second entry.
+        // The protocol is declared per task, so the account table holds none.
         image: {
+          api_type: "ark",
           default: "doubao-seedream-5-0-flash-260915",
           models: ["doubao-seedream-5-0-flash-260915", "doubao-seedream-5-0-pro"],
         },
         video: {
+          api_type: "ark",
           default: "doubao-seedance-1-0-pro",
           models: ["doubao-seedance-1-0-pro"],
         },
@@ -210,16 +212,15 @@ describe("prepareConfigFile", () => {
     });
   });
 
-  it("seeds a layout where only qwen needs an edit", () => {
+  it("seeds a layout that runs as written", () => {
     ensureConfigFile();
     const text = fs.readFileSync(configPath(), "utf8");
 
     expect(text).toContain('default_provider = "volcengine"');
     expect(text).toMatch(/^base_url\s*=\s*"https:\/\/ark\.cn-beijing\.volces\.com"$/m);
-    // Only the workspace host needs an edit; everything else is ready to run.
-    expect(text).toMatch(
-      /^base_url\s*=\s*"https:\/\/<workspace-id>\.cn-beijing\.maas\.aliyuncs\.com"$/m,
-    );
+    // Alibaba is the native protocol on the public host: no placeholder to finish.
+    expect(text).toMatch(/^base_url\s*=\s*"https:\/\/dashscope\.aliyuncs\.com"$/m);
+    expect(text).not.toContain("<workspace-id>");
     expect(text).not.toMatch(/^path\s*=/m);
     expect(text).not.toMatch(/^output_dir\s*=/m);
   });
@@ -795,5 +796,115 @@ models = ["m"]
 
   it("rejects an unknown provider by name", () => {
     expect(() => validateProviderShape("ghost", taskConfig())).toThrow(/unknown provider "ghost"/);
+  });
+});
+
+describe("dialect vocabulary", () => {
+  it("accepts api_type openai", () => {
+    writeConfig(`[providers.p]
+api_type = "openai"
+base_url = "https://gw.example.com"
+
+[providers.p.image]
+models = ["m"]
+`);
+    const config = loadConfig();
+    expect(config.providers.p?.api_type).toBe("openai");
+    expect(config.providers.p?.api_type_alias).toBeUndefined();
+  });
+
+  it("normalizes the deprecated alias qwen to openai and marks it", () => {
+    writeConfig(`[providers.p]
+api_type = "qwen"
+base_url = "https://gw.example.com"
+
+[providers.p.image]
+models = ["m"]
+`);
+    const config = loadConfig();
+    expect(config.providers.p?.api_type).toBe("openai");
+    expect(config.providers.p?.api_type_alias).toBe(true);
+  });
+
+  it("names every dialect in the invalid api_type message", () => {
+    writeConfig(`[providers.p]
+api_type = "nope"
+base_url = "https://gw.example.com"
+
+[providers.p.image]
+models = ["m"]
+`);
+    const error = thrownBy(() => loadConfig());
+    expect(error.message).toContain('"openai"');
+    expect(error.message).toContain('"dashscope"');
+    expect(error.message).toContain('"ark"');
+  });
+});
+
+describe("per-task protocol", () => {
+  it("lets a task declare its own protocol, overriding the provider default", () => {
+    writeConfig(`
+[providers.gw]
+api_type = "openai"
+base_url = "https://gw.example.com"
+
+[providers.gw.image]
+api_type = "ark"
+default = "m"
+models = ["m"]
+`);
+    const config = loadConfig();
+    expect(resolveSelection({ provider: "gw", task: "image" }, config).dialect).toBe("ark");
+  });
+
+  it("falls back to the provider-level protocol when the task declares none", () => {
+    writeConfig(`
+[providers.gw]
+base_url = "https://gw.example.com"
+
+[providers.gw.image]
+api_type = "ark"
+default = "m"
+models = ["m"]
+`);
+    const config = loadConfig();
+    expect(resolveSelection({ provider: "gw", task: "image" }, config).dialect).toBe("ark");
+  });
+
+  it("resolves each task to its own protocol on one account", () => {
+    writeConfig(`
+[providers.gw]
+base_url = "https://gw.example.com"
+
+[providers.gw.image]
+api_type = "dashscope"
+default = "m"
+models = ["m"]
+
+[providers.gw.video]
+api_type = "ark"
+default = "v"
+models = ["v"]
+`);
+    const config = loadConfig();
+    expect(resolveSelection({ provider: "gw", task: "image" }, config).dialect).toBe("dashscope");
+    // The video half resolves to ark, which has no video adapter yet: reaching
+    // that error proves the task's own protocol was the one that applied.
+    expect(thrownBy(() => resolveSelection({ provider: "gw", task: "video" }, config)).message).toMatch(
+      /the "ark" dialect has no "video" adapter yet/,
+    );
+  });
+
+  it("names the task table when no protocol is declared anywhere", () => {
+    writeConfig(`
+[providers.gw]
+base_url = "https://gw.example.com"
+
+[providers.gw.image]
+models = ["m"]
+`);
+    const config = loadConfig();
+    expect(thrownBy(() => resolveSelection({ provider: "gw", task: "image" }, config)).message)
+      .toContain("[providers.gw.image]");
   });
 });

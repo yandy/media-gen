@@ -1,9 +1,18 @@
-export type Dialect = "qwen" | "ark";
+/**
+ * A protocol family, not a vendor. `openai` is the OpenAI-compatible wire
+ * format; `qwen` survives only as a deprecated alias of it in config.toml.
+ */
+export type Dialect = "openai" | "dashscope" | "ark";
 
-/** A provider is the ledger — protocol, origin, credentials — never a model. */
+/** A provider is the ledger — host, credentials — never a model. */
 export interface ProviderConfig {
   name: string;
-  api_type: Dialect;
+  /**
+   * The provider-level default protocol, unresolved: a task may override it.
+   * Never decide how to serialize from this — read `TaskBinding.dialect`, which
+   * is the protocol the run actually speaks.
+   */
+  api_type?: Dialect;
   base_url: string;
   api_key_env?: string;
 }
@@ -16,7 +25,7 @@ export interface ImageRequest {
   n: number;
   seed?: number;
   watermark?: boolean;
-  // qwen extras
+  // openai / dashscope options
   negative_prompt?: string;
   prompt_extend?: boolean;
   prompt_extend_mode?: "direct" | "agent";
@@ -53,6 +62,8 @@ export interface TaskBinding {
   timeout_ms: number;
   /** A task's own endpoint path, for hosts whose layout differs from the vendor's. */
   path?: string;
+  /** The effective protocol for this run: the task's api_type, else the provider's. */
+  dialect: Dialect;
 }
 
 /** What a provider can be asked to produce. Each task has its own endpoint and adapter. */
@@ -63,11 +74,22 @@ export type Task = "image" | "video";
  * carries the version/API prefix itself (`/api/v3/images/generations`), so
  * `base_url` stays a single per-provider origin no matter how many tasks the
  * provider serves.
+ *
+ * Async tasks (both video protocols) will need a second phase — create, poll,
+ * fetch result. When they land that becomes an optional `asyncTask` block here
+ * (buildHeaders / taskIdFrom / pollPath / parseTaskResult), rather than polling
+ * hidden inside parseResponse.
  */
 export interface TaskAdapter {
   createPath: string;
   buildRequest(req: ImageRequest): unknown;
   parseResponse(json: unknown, requestId?: string): ParsedResponse;
+  /**
+   * Extracts a vendor error from a non-2xx body. Dialects whose errors do not
+   * use `{ error: { code, message } }` implement this; callers fall back to the
+   * generic shape when it is absent or returns undefined.
+   */
+  parseErrorBody?(json: unknown): { code?: string; message: string } | undefined;
 }
 
 /** Which tasks this dialect implements; a task absent here has no endpoint yet. */

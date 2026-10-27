@@ -59,6 +59,8 @@ type ValueSource = "config.toml" | "default";
 interface ConfiguredValue {
   value: string;
   source: ValueSource;
+  /** Extra context rendered beside the value, e.g. a deprecated-alias notice. */
+  note?: string;
 }
 
 interface KeyStatus {
@@ -69,6 +71,8 @@ interface KeyStatus {
 
 interface TaskView {
   task: string;
+  /** The protocol this task resolved to, with the provider default as fallback. */
+  api_type?: ConfiguredValue;
   default?: ConfiguredValue;
   models?: string[];
   timeout_seconds?: number;
@@ -167,10 +171,10 @@ function imageHelpText(command: "generate" | "edit"): string {
   const examples =
     command === "edit"
       ? `  # edit a local file (local paths are read and sent as base64 data URLs)
-  mediagen image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider dashscope
+  mediagen image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider aliyun
 
   # combine several references
-  mediagen image edit "put the character from the first image into the scene from the second" --image ./character.png --image ./scene.jpg --provider dashscope
+  mediagen image edit "put the character from the first image into the scene from the second" --image ./character.png --image ./scene.jpg --provider aliyun
 
   # ark layer decomposition: one paid request, several files back (base + layers)
   mediagen image edit "separate the sticker from its background" --image ./sticker.png --provider volcengine --layer-decomposition true --json
@@ -178,13 +182,13 @@ function imageHelpText(command: "generate" | "edit"): string {
   # a third-party proxy declared as [providers.my-proxy] in config.toml
   mediagen image edit "remove the timestamp" --image ./shot.png --provider my-proxy --out-dir ./out`
       : `  # text to image
-  mediagen image generate "a red fox in fresh snow, soft morning light" --provider dashscope --size 1024x1024 --out-dir ./out
+  mediagen image generate "a red fox in fresh snow, soft morning light" --provider aliyun --size 1024x1024 --out-dir ./out
 
   # image to image; "mediagen image edit" is the same command with --image required
-  mediagen image generate "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider dashscope
+  mediagen image generate "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider aliyun
 
   # several references at once
-  mediagen image generate "the character from the first image wearing the jacket from the second" --image ./character.png --image ./jacket.png --provider dashscope
+  mediagen image generate "the character from the first image wearing the jacket from the second" --image ./character.png --image ./jacket.png --provider aliyun
 
   # four ark variants as JSON, for an agent to parse
   mediagen image generate "minimalist logo for a coffee roastery" --provider volcengine --model doubao-seedream-5-0-pro --n 4 --seed 42 --json
@@ -193,28 +197,34 @@ function imageHelpText(command: "generate" | "edit"): string {
   mediagen image generate "product photo on a white background" --provider my-proxy --out-dir ./shots
 
   # a one-off test against a proxy, without touching config.toml
-  mediagen image generate "colour test card" --provider dashscope --base-url https://proxy.example.com/v1 --api-key sk-...`;
+  mediagen image generate "colour test card" --provider aliyun --base-url https://proxy.example.com --api-key sk-...`;
 
   return `
 ${intro}
 
 Models (--provider picks the account, --model the exact id; config.toml decides what is allowed):
-  qwen-image-3.0              dashscope   best text rendering (CJK + Latin) and image editing
+  qwen-image-3.0              aliyun      best text rendering (CJK + Latin) and image editing
   doubao-seedream-5-0-flash   volcengine  fastest; use it for drafts and iteration
   doubao-seedream-5-0-pro     volcengine  highest quality; slower and more expensive
-  A model must be listed in models = [...] under [providers.<name>.image]; the two
-  provider names above are what the first run writes into config.toml, and a second
-  model of the same vendor is one more entry there, not another provider.
+  A model must be listed in models = [...] under [providers.<name>.image]; the provider
+  names above are what the first run writes into config.toml, and a second model of the
+  same vendor is one more entry there, not another provider.
+
+Protocols (api_type, declared per task in config.toml):
+  openai     the OpenAI-compatible wire format; "qwen" still works as an alias
+  dashscope  Alibaba's native form: input.messages + parameters, output.choices[].image
+  ark        Volcengine's own API (image + video)
 
 Sizes (--size, passed through to the vendor; omit it for the vendor default):
-  tiers    1K | 1.5K | 2K | 3K | 4K     ark takes these (its default is 2K)
+  tiers    1K | 1.5K | 2K | 3K | 4K     ark and openai take these (ark defaults to 2K)
   pixels   WxH with a lowercase x, e.g. 2048x2048, 1536x2048, 1024x1024
-  auto     qwen only; omitting --size lets qwen choose a resolution from the prompt
+  auto     openai only; omitting --size lets the model choose from the prompt
+  dashscope takes pixels only; it sends 宽*高 and rejects tiers and auto.
 
 Images and count:
   --image <path-or-url>  repeatable; a local file becomes a data:<mime>;base64 URL
   --n <count>            1-6 images. ark fans out into one paid request per image
-                         (seeds seed, seed+1, ...); qwen sends a single request.
+                         (seeds seed, seed+1, ...); openai and dashscope send a single request.
 
 Output:
   Files are written to --out-dir (default: config output_dir, else the current
@@ -224,9 +234,10 @@ Output:
   exits 0 and lists each failure: the images on disk were already paid for, so do not
   retry the whole request.
 
-Vendor-specific flags:
-  qwen only  --negative-prompt --prompt-extend --prompt-extend-mode --enable-thinking
-  ark only   --output-format --optimize-prompt --layer-decomposition --background
+Protocol-specific flags:
+  openai only  --prompt-extend-mode --enable-thinking
+  openai and dashscope  --negative-prompt --prompt-extend
+  ark only  --output-format --optimize-prompt --layer-decomposition --background
   A flag the selected dialect does not accept fails before any paid request is sent.
   Boolean flags take an explicit value: --watermark false, not --no-watermark.
 
@@ -238,14 +249,14 @@ const IMAGE_OPTION_HELP = {
   provider: "provider name declared in config.toml (default: config default_provider)",
   model: "model id, must be listed in the task's models (default: the task's default)",
   image: "reference image, repeatable; local files are sent as data URLs",
-  size: "1K|1.5K|2K|3K|4K, WxH pixels, or auto (qwen only)",
+  size: "1K|1.5K|2K|3K|4K, WxH pixels, or auto (openai only; dashscope takes pixels)",
   n: "how many images, 1-6 (ark sends one paid request per image)",
   seed: "random seed; ark fan-out uses seed, seed+1, ...",
-  watermark: "true|false (default: the vendor default, qwen false / ark true)",
-  negativePrompt: "qwen only: what the image must not contain",
-  promptExtend: "qwen only: true|false prompt rewriting",
-  promptExtendMode: "qwen only: agent mode is text-to-image only",
-  enableThinking: "qwen only: true|false",
+  watermark: "true|false (default: the vendor default, false on openai and dashscope)",
+  negativePrompt: "openai and dashscope: what the image must not contain",
+  promptExtend: "openai and dashscope: true|false prompt rewriting",
+  promptExtendMode: "openai only: agent mode is text-to-image only",
+  enableThinking: "openai only: true|false",
   outputFormat: "ark only (default: the vendor default, jpeg)",
   optimizePrompt: "ark only; flash models accept standard only",
   layerDecomposition: "ark only: true|false, needs --image, returns several files",
@@ -351,7 +362,7 @@ export function createProgram(options: ProgramOptions = {}): Command {
   config
     .command("add <name>")
     .description("Create a [providers.<name>] table in config.toml")
-    .option("--api-type <dialect>", "protocol dialect: qwen or ark")
+    .option("--api-type <dialect>", "protocol dialect: openai, dashscope or ark")
     .option("--base-url <url>", "the provider's origin, e.g. https://ark.cn-beijing.volces.com")
     .option("--task <image|video>", "which task table to create (default: image)")
     .option("--model <id>", "the model id this task defaults to")
@@ -751,9 +762,11 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
   const provider = name.trim();
   if (provider === "") throw new UsageError("a provider name is required");
 
-  const apiType = parseChoice(flags.apiType, ["qwen", "ark"], "--api-type");
+  const apiType = parseChoice(flags.apiType, ["openai", "dashscope", "ark", "qwen"], "--api-type");
   if (apiType === undefined) {
-    throw new UsageError('--api-type is required: "qwen" or "ark"');
+    throw new UsageError(
+      '--api-type is required: "openai", "dashscope" or "ark" ("qwen" still works as a deprecated alias of "openai")',
+    );
   }
   if (flags.baseUrl === undefined) throw new UsageError("--base-url is required");
   const task: Task = parseChoice(flags.task, ["image", "video"], "--task") ?? "image";
@@ -781,16 +794,21 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
     );
   }
 
+  // The protocol is declared per task: `api_type` is written into the task table
+  // below, so the provider table is only the account (host + key).
+  const dialect = apiType === "qwen" ? "openai" : apiType;
   const fields: Record<string, string> = {
-    api_type: apiType,
     base_url: originBaseUrl(flags.baseUrl),
   };
   if (apiKeyEnv !== undefined) fields.api_key_env = apiKeyEnv;
 
   const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
   const beforeTable = before.trim() === "" ? undefined : parseToml(before);
-  const after = appendProviderTable(before, provider, fields, task, model);
-  assertFaithfulRewrite(beforeTable, after, provider, fields, task, model, file);
+  if (apiType === "qwen") {
+    writeErrLine('note: api_type "qwen" is a deprecated alias; writing api_type = "openai"');
+  }
+  const after = appendProviderTable(before, provider, fields, task, model, dialect);
+  assertFaithfulRewrite(beforeTable, after, provider, fields, task, model, dialect, file);
   try {
     writeConfigFile(after);
   } catch (error) {
@@ -800,7 +818,14 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
 
   if (flags.json === true) {
     writeLine(
-      JSON.stringify({ ok: true, provider, task, model, config_file: file, fields }),
+      JSON.stringify({
+        ok: true,
+        provider,
+        task,
+        model,
+        config_file: file,
+        fields: { ...fields, api_type: dialect },
+      }),
     );
     return;
   }
@@ -810,16 +835,16 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
     apiKeyEnv === undefined
       ? `run "${loginHint}" to store its key`
       : `set ${shellArg(apiKeyEnv)}, or run "${loginHint}"`;
-  if (adapterPath(apiType, task) === undefined) {
+  if (adapterPath(dialect, task) === undefined) {
     writeErrLine(
-      `note: no dialect has a "${task}" adapter yet; the table is stored and ` +
-        `"config show" will mark it until video lands`,
+      `note: the "${dialect}" dialect has no "${task}" adapter yet; the table is stored ` +
+        `and "config show" will mark it until it lands`,
     );
   }
 
   writeLine(
     [
-      `added provider "${provider}" to ${file} with a ${task} table defaulting to "${model}"`,
+      `added provider "${provider}" to ${file} with an ${task} table defaulting to "${model}"`,
       `another model of the same provider is one more entry in models = [...] under [providers.${tomlKey(provider)}.${task}]`,
       keyRoute,
     ].join("\n"),
@@ -870,15 +895,20 @@ function runConfigShow(flags: { json?: boolean }): void {
 
   if (views.length === 0) {
     lines.push(
-      "  (none; run \"mediagen config add <name> --api-type <qwen|ark> --base-url <origin> --model <id>\")",
+      "  (none; run \"mediagen config add <name> --api-type <openai|dashscope|ark> --base-url <origin> --model <id>\")",
     );
   }
 
   for (const { name, apiKeyEnv, view } of views) {
-    lines.push(`  ${view.name} (dialect ${view.api_type?.value ?? "unknown"})`);
+    lines.push(
+      `  ${view.name} (dialect ${
+        view.api_type?.value ??
+        (view.tasks?.some((task) => task.api_type !== undefined) === true ? "per task" : "unknown")
+      })`,
+    );
     for (const field of ["api_type", "base_url", "api_key_env"] as const) {
       const value = view[field];
-      if (value !== undefined) lines.push(`    ${field}: ${show(value)}`);
+      if (value !== undefined) lines.push(`    ${field}: ${show(value)}${noteSuffix(value)}`);
     }
     if (view.missing !== undefined && view.missing.length > 0) {
       lines.push(`    missing: ${view.missing.join(", ")} (required in ${file})`);
@@ -891,6 +921,9 @@ function runConfigShow(flags: { json?: boolean }): void {
 
     for (const taskView of view.tasks ?? []) {
       lines.push(`    ${taskView.task}:`);
+      if (taskView.api_type !== undefined) {
+        lines.push(`      api_type: ${show(taskView.api_type)}${noteSuffix(taskView.api_type)}`);
+      }
       if (taskView.default !== undefined) lines.push(`      default: ${show(taskView.default)}`);
       if (taskView.models !== undefined) {
         lines.push(`      models: ${taskView.models.join(", ")}`);
@@ -925,6 +958,11 @@ function show(value: ConfiguredValue): string {
   return `${value.value} (${value.source})`;
 }
 
+/** The trailing half of a configured value's note, or nothing. */
+function noteSuffix(value: ConfiguredValue): string {
+  return value.note === undefined ? "" : `; ${value.note}`;
+}
+
 /** A top-level value came from config.toml when the file declares the key. */
 function configuredValue(value: string, declared: unknown): ConfiguredValue {
   return declared === undefined ? { value, source: "default" } : { value, source: "config.toml" };
@@ -939,13 +977,26 @@ function buildProviderView(name: string, entry: ProviderEntry): ProviderView {
   for (const key of ["api_type", "base_url", "api_key_env"] as const) {
     const value = entry[key];
     if (value === undefined) {
-      // api_key_env is optional everywhere; the rest are required, and missing
-      // them is exactly what resolveSelection() will complain about.
-      if (key !== "api_key_env") missing.push(key);
+      // api_key_env is optional everywhere, and api_type may live on the task
+      // tables instead; the rest are required, and missing them is exactly what
+      // resolveSelection() will complain about.
+      if (key === "base_url") missing.push(key);
       continue;
     }
     fields[key] = { value, source: "config.toml" };
+    if (key === "api_type" && entry.api_type_alias === true) {
+      fields[key] = {
+        value,
+        source: "config.toml",
+        note: 'declared as the deprecated alias "qwen"',
+      };
+    }
   }
+
+  const declaresProtocol =
+    entry.api_type !== undefined ||
+    KNOWN_TASKS.some((task) => entry.tasks[task]?.api_type !== undefined);
+  if (!declaresProtocol) missing.push("api_type");
 
   const view: ProviderView = {
     name,
@@ -962,6 +1013,26 @@ function buildProviderView(name: string, entry: ProviderEntry): ProviderView {
     (task) => {
       const block = entry.tasks[task] ?? {};
       const taskView: TaskView = { task };
+      // The task's own protocol wins; the provider-level value is the default it
+      // falls back to, and it is shown here so `config show` answers "what will
+      // this task actually speak" without the reader resolving it themselves.
+      const ownDialect = block.api_type;
+      const effectiveDialect = ownDialect ?? entry.api_type;
+      if (ownDialect !== undefined) {
+        taskView.api_type = {
+          value: ownDialect,
+          source: "config.toml",
+          ...(block.api_type_alias === true
+            ? { note: 'declared as the deprecated alias "qwen"' }
+            : {}),
+        };
+      } else if (effectiveDialect !== undefined) {
+        taskView.api_type = {
+          value: effectiveDialect,
+          source: "default",
+          note: "provider default",
+        };
+      }
       if (block.default !== undefined) {
         taskView.default = { value: block.default, source: "config.toml" };
       }
@@ -976,8 +1047,8 @@ function buildProviderView(name: string, entry: ProviderEntry): ProviderView {
       }
       const path =
         block.path ??
-        (fields.api_type === undefined ? undefined : adapterPath(fields.api_type.value, task));
-      if (fields.api_type === undefined) {
+        (effectiveDialect === undefined ? undefined : adapterPath(effectiveDialect, task));
+      if (effectiveDialect === undefined) {
         taskView.endpoint_note = "api_type is not set";
       } else if (path === undefined) {
         taskView.endpoint_note = "no adapter yet";
@@ -1052,12 +1123,14 @@ function appendProviderTable(
   fields: Record<string, string>,
   task: string,
   model: string,
+  dialect: string,
 ): string {
   const lines = [`[providers.${tomlKey(name)}]`];
   for (const [key, value] of Object.entries(fields)) {
     lines.push(`${key} = ${tomlBasicString(value)}`);
   }
   lines.push("", `[providers.${tomlKey(name)}.${task}]`);
+  lines.push(`api_type = ${tomlBasicString(dialect)}`);
   lines.push(`default = ${tomlBasicString(model)}`);
   lines.push(`models = [${tomlBasicString(model)}]`);
   const base = text.trim() === "" ? "" : text.endsWith("\n") ? `${text}\n` : `${text}\n\n`;
@@ -1077,6 +1150,7 @@ function assertFaithfulRewrite(
   expected: Record<string, string>,
   task: string,
   model: string,
+  apiType: string,
   file: string,
 ): void {
   function fail(): never {
@@ -1098,6 +1172,7 @@ function assertFaithfulRewrite(
   }
 
   const taskTable = tableAt(parsed, ["providers", name, task]);
+  if (taskTable?.api_type !== apiType) fail();
   if (taskTable?.default !== model) fail();
   const models = taskTable?.models;
   if (!Array.isArray(models) || models.length !== 1 || models[0] !== model) fail();

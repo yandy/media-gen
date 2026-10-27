@@ -13,7 +13,7 @@ npm install -g @yandy0725/mediagen-cli
 mediagen config show
 
 # 新增一条入口：一个账号（协议 + origin + key）带一张 image 任务表
-mediagen config add my-proxy --api-type qwen \
+mediagen config add my-proxy --api-type openai \
   --base-url https://abc123.cn-beijing.maas.aliyuncs.com \
   --model qwen-image-3.0 --api-key-env DASHSCOPE_API_KEY
 # 视频表加 --task video；再加一个模型只需往 models 里多写一项
@@ -43,17 +43,29 @@ Node >= 18，两个运行时依赖，需要 DashScope 和/或方舟的 API key�
 
 | 模型 | provider | 什么时候选它 |
 |---|---|---|
-| `qwen-image-3.0` | `--provider dashscope` | 文字渲染（中日韩 + 拉丁）、图像编辑 |
+| `qwen-image-3.0` | `--provider aliyun` | 文字渲染（中日韩 + 拉丁）、图像编辑 |
 | `doubao-seedream-5-0-flash-260915` | `--provider volcengine` | 速度：草稿、迭代 |
 | `doubao-seedream-5-0-pro` | `--provider volcengine --model doubao-seedream-5-0-pro` | 最高质量 |
 
-`dashscope` / `volcengine` 是首次运行写进 `config.toml` 的两个 provider 名，可以随意改。
+`aliyun` / `volcengine` 是首次运行写进 `config.toml` 的两个 provider 名，可以随意改。
 一个模型只有被列在该 provider 的 `image` 表的 `models = [...]` 里才可用；同一家厂商的
 第二个模型是往那张表里加一行 —— 不需要新增 provider。模型 id 是带日期的快照，随版本
-滚动时改 `models`（以及 `default`）即可。`--size`
-接受档位（`2K`）、像素（`2048x2048`）或 `auto`（仅 qwen）；`--n` 接受 1-6 ——
-在 ark 上每张图都是一个独立的付费请求。厂商专属参数（`--negative-prompt` 仅 qwen，
-`--output-format` 仅 ark）会在发出任何请求之前失败。
+滚动时改 `models`（以及 `default`）即可。
+
+### 协议
+
+每个任务的表自己声明 `api_type`，所以同一个账号可以让图片走一种协议、视频走另一种：
+
+| `api_type` | 线上形态 | 什么时候选它 |
+|---|---|---|
+| `openai` | OpenAI Images 形态：扁平的 `{model, prompt, size, n}`，返回 `data[].url` | 百炼的 `compatible-mode`、多数第三方代理 |
+| `dashscope` | 阿里原生态：`input.messages` + `parameters`，返回 `output.choices[].message.content[].image` | 百炼原生端点，或暴露该协议的网关（见下） |
+| `ark` | 火山自有 API：图片形态接近 OpenAI，但参数与逐条错误语义自成一套 | 火山 Ark，图片与视频 |
+
+`qwen` 仍可用，是 `openai` 的弃用别名。所选协议不接受的参数会在发出任何付费请求之前失败
+（`--output-format` 仅 ark，`--prompt-extend-mode` 仅 openai）。`--size` 接受档位（`2K`）、
+像素（`2048x2048`）或 `auto`（仅 openai）；`dashscope` 只收像素，因为它发送 `宽*高`，
+没有档位与 `auto` 的概念。`--n` 接受 1-6 —— 在 ark 上每张图都是一个独立的付费请求。
 
 ## 输出
 
@@ -62,7 +74,7 @@ Node >= 18，两个运行时依赖，需要 DashScope 和/或方舟的 API key�
 stdout 上每行打印一个绝对路径；`--json` 打印一个对象：
 
 ```json
-{"ok":true,"partial":false,"files":[{"path":"/tmp/out/dashscope-qwen-image-3-0-20261025-020839-0.png","index":0,"url":"https://dashscope-result.oss-cn-beijing.aliyuncs.com/1.png"}],"errors":[],"usage":{"image_count":1},"request_id":"a1b2c3d4"}
+{"ok":true,"partial":false,"files":[{"path":"/tmp/out/aliyun-qwen-image-3-0-20261025-020839-0.png","index":0,"url":"https://dashscope-result.oss-cn-beijing.aliyuncs.com/1.png"}],"errors":[],"usage":{"image_count":1},"request_id":"a1b2c3d4"}
 ```
 
 `partial: true` 且退出码 `0` 表示部分图片成功、部分失败：磁盘上那些已经付过费了，
@@ -85,51 +97,56 @@ stdout 上每行打印一个绝对路径；`--json` 打印一个对象：
 default_provider = "volcengine"
 # output_dir = "./media-output"
 
-[providers.volcengine]              # 账本：协议、主机、key
-api_type    = "ark"
+[providers.volcengine]              # 账号：主机 + key
 base_url    = "https://ark.cn-beijing.volces.com"
 api_key_env = "ARK_API_KEY"
 
 [providers.volcengine.image]        # 能力：一个任务一张表
-default = "doubao-seedream-5-0-flash-260915"
-models  = ["doubao-seedream-5-0-flash-260915", "doubao-seedream-5-0-pro"]
+api_type = "ark"                    # 协议声明在任务上，不在账号上
+default  = "doubao-seedream-5-0-flash-260915"
+models   = ["doubao-seedream-5-0-flash-260915", "doubao-seedream-5-0-pro"]
 
 [providers.volcengine.video]
-default = "doubao-seedance-1-0-pro"
-models  = ["doubao-seedance-1-0-pro"]
+api_type = "ark"
+default  = "doubao-seedance-1-0-pro"
+models   = ["doubao-seedance-1-0-pro"]
 
-[providers.dashscope]
-api_type    = "qwen"
-base_url    = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"
+[providers.aliyun]
+base_url    = "https://dashscope.aliyuncs.com"
 api_key_env = "DASHSCOPE_API_KEY"
 
-[providers.dashscope.image]
-default = "qwen-image-3.0"
-models  = ["qwen-image-3.0"]
+[providers.aliyun.image]
+api_type = "openai"
+default  = "qwen-image-3.0"
+models   = ["qwen-image-3.0"]
 
-[providers.my-proxy]                # 同一协议的第二个账号
-api_type    = "qwen"
-base_url    = "https://proxy.example.com/my-gateway"   # 可带网关前缀
-api_key_env = "MY_PROXY_KEY"
+[providers.my-gateway]              # 提供原生协议的网关
+base_url    = "https://gateway.example.com"
+api_key_env = "MY_GATEWAY_KEY"
 
-[providers.my-proxy.image]
-default = "qwen-image-3.0"
-models  = ["qwen-image-3.0"]
+[providers.my-gateway.image]
+api_type = "dashscope"
+path     = "/v1/images/generations" # 网关自己的路径，不是百炼的
+default  = "qwen-image-2.0-pro"
+models   = ["qwen-image-2.0-pro"]
 ```
 
-一个 provider = **一个账号**：协议（`api_type`，取 `qwen` 或 `ark`）、一台主机
-（`base_url`）、可选的 `api_key_env`。它能提供的每个任务按名字挂在下面
-（`[providers.<name>.image]`、`[providers.<name>.video]`），表里列允许使用的模型 id，
-以及 `--model` 缺省时用的 `default`。`timeout_seconds` 按任务可选（图片 300、视频 1800）。
-同一家厂商的两个模型是同一个 `models` 列表里的两项，不是两个 provider。
+一个 provider = **一个账号**：一台主机（`base_url`）+ 可选的 `api_key_env`。它能提供的
+每个任务按名字挂在下面（`[providers.<name>.image]`、`[providers.<name>.video]`），
+各自声明 `api_type`、允许使用的模型 id，以及 `--model` 缺省时用的 `default`。
+`timeout_seconds` 按任务可选（图片 300、视频 1800）。同一家厂商的两个模型是同一个
+`models` 列表里的两项，不是两个 provider；同一个账号的两种协议是两行 `api_type`，
+也不是两个 provider。`api_type` 也可以写在账号表上，作为其下所有任务的默认值。
 
 **`base_url` 就是 origin** —— 可以带网关前缀，但不带版本段。版本段属于端点，由方言按任务
-自己拼接（`/api/v3/images/generations`、`/compatible-mode/v1/images/generations`），
+自己拼接（`/api/v3/images/generations`、`/compatible-mode/v1/images/generations`、
+`/api/v1/services/aigc/multimodal-generation/generation`），
 所以换任务只换 path。若在厂商自有域名上仍以 `/api/v3`、`/api/v1` 或
 `/compatible-mode/v1` 结尾，会在发请求前被拒绝，并给出应填的 origin。
 文件是唯一真相：内置没有任何 provider，首次运行只是把上面这份内容写进 `config.toml`
-供你修改。种子 qwen 那条带 `<workspace-id>` 占位符，只有当它被选中时才会在花钱前报错，
-所以只需要改这一行。
+供你修改。种子两条都能直接跑：`volcengine` 走 Ark，`aliyun` 走百炼原生协议（公网域名即可）。
+若要把 `aliyun` 换成 OpenAI 兼容协议，需改用业务空间专属域名
+`https://{workspace-id}.cn-beijing.maas.aliyuncs.com` —— 那个端点不对外公开提供。
 
 **如果某个主机的 API 不在厂商自己的路径下** —— 例如网关，或某个把 `/api/v3` 换成
 `/api/plan/v3` 的套餐 —— 在任务表上用 `path` 声明这段前缀，适配器就不再追加：
@@ -151,8 +168,9 @@ path = "/images/generations"        # 请求打到 .../api/plan/v3/images/genera
 
 key 跟着 provider 实例走，依次来自 `--api-key`、该实例声明的 `api_key_env`、
 `auth.json`。没有任何方言级的默认 key 变量，所以同一方言的两条入口可以各用各的 key。
-key 永远只以打码形式输出。`base_url` 写在文件里（`image generate` 有一次性的 `--base-url` 覆盖），并且会在发请求前校验：对 qwen
-来说公共域名直接就是 `404`，所以种子保留一个会明确失败的占位符。`mediagen config show`
+key 永远只以打码形式输出。`base_url` 写在文件里（`image generate` 有一次性的 `--base-url` 覆盖），并且会在发请求前校验：百炼的
+OpenAI 兼容端点（`compatible-mode`）只在业务空间专属域名上提供，所以种子保留一个会明确失败
+的占位符；而 `dashscope` 协议所用的百炼原生端点，公共域名同样可用。`mediagen config show`
 会打印每个 provider 的任务、模型，以及各自实际会请求的 endpoint。Node >= 24 上设
 `NODE_USE_ENV_PROXY=1` 可走 `HTTP_PROXY`。超时：每次请求取该任务的 `timeout_seconds`
 （默认图片 300 秒、视频 1800 秒），每次下载 120 秒。
@@ -171,7 +189,7 @@ npm run dev -- image generate --help
 ```
 
 `src/cli.ts` 负责 commander 接线和错误到退出码的映射；`src/generate.ts` 是流水线
-（校验 → 解析 → 调用 → 下载 → 汇报）；`src/api/{qwen,ark}.ts` 是
+（校验 → 解析 → 调用 → 下载 → 汇报）；`src/api/{qwen,ark,dashscope}.ts` 是
 `src/types.ts` 中 `DialectAdapter` 接缝背后的方言适配器，周围是 `config.ts`、
 `auth.ts`、`http.ts`、`download.ts`、`output.ts`。
 

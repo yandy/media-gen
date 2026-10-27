@@ -7,8 +7,8 @@ import type {
 } from "../types.js";
 
 /**
- * Fields that only the qwen dialect accepts. Receiving one on the ark dialect
- * means the caller selected a vendor-specific flag for the wrong provider;
+ * Fields that only the openai dialect accepts. Receiving one on the ark dialect
+ * means the caller selected a flag for the wrong protocol;
  * fail loudly rather than dropping it from the wire body.
  */
 const QWEN_ONLY_FIELDS = [
@@ -49,7 +49,7 @@ export function buildArkRequest(req: ImageRequest): Record<string, unknown> {
   for (const field of QWEN_ONLY_FIELDS) {
     if (req[field] !== undefined) {
       throw new UsageError(
-        `option "${field}" is qwen-only and is not supported by the ark dialect; remove it or use a qwen provider`,
+        `option "${field}" is openai-dialect only and is not supported by the ark dialect; remove it or set api_type = "openai" on this task`,
       );
     }
   }
@@ -91,7 +91,7 @@ function parseArkFailure(value: Record<string, unknown>): { code: string; messag
 }
 
 /**
- * Normalize an ark response. Unlike qwen, ark may reject individual `data`
+ * Normalize an ark response. Unlike the openai dialect, ark may reject individual `data`
  * items (content moderation, per-layer failures) while the rest succeed, so
  * per-item errors are collected instead of aborting the whole response. Only a
  * response with no usable image at all is an error.

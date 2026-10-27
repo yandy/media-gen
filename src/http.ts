@@ -2,9 +2,11 @@ import { ApiError } from "./errors.js";
 import { tomlKey } from "./toml.js";
 import { getAdapter } from "./api/index.js";
 import type {
+  Dialect,
   ImageRequest,
   ParsedResponse,
   ProviderConfig,
+  TaskAdapter,
   TaskBinding,
 } from "./types.js";
 
@@ -153,9 +155,11 @@ function errorForStatus(
   text: string,
   status: number,
   provider: ProviderConfig,
+  dialect: Dialect,
+  adapter: TaskAdapter,
   redact: (text: string) => string,
 ): ApiError {
-  if (status === 404 && text.trim() === "" && provider.api_type === "qwen") {
+  if (status === 404 && text.trim() === "" && dialect === "openai") {
     return new ApiError(missingQwenEndpointMessage(provider, status, redact));
   }
 
@@ -166,7 +170,7 @@ function errorForStatus(
     json = undefined;
   }
 
-  const vendor = vendorError(json);
+  const vendor = adapter.parseErrorBody?.(json) ?? vendorError(json);
   if (vendor !== undefined) {
     // The code is vendor/proxy output too: a proxy that reflects the request
     // headers would otherwise leak the key through `ApiError.code`.
@@ -218,7 +222,7 @@ export async function callApi(params: CallApiParams): Promise<ParsedResponse> {
   // invalid flag fails before a paid request is sent. Serializing here, outside
   // the transport try, keeps a payload that cannot be serialized from being
   // misreported as a network failure.
-  const adapter = getAdapter(provider.api_type, binding.task);
+  const adapter = getAdapter(binding.dialect, binding.task);
   const body = adapter.buildRequest(request);
   const payload = JSON.stringify(body);
   const redact = redactorFor(apiKey);
@@ -252,7 +256,7 @@ export async function callApi(params: CallApiParams): Promise<ParsedResponse> {
   const text = await readResponseText(response, url, redact, timeoutSeconds);
 
   if (!response.ok) {
-    throw errorForStatus(text, response.status, provider, redact);
+    throw errorForStatus(text, response.status, provider, binding.dialect, adapter, redact);
   }
 
   const json = parseJson(text, response.status, redact);

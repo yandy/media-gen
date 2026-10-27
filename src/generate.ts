@@ -55,23 +55,36 @@ const N_LIMIT = 6;
 
 /**
  * Light format check only: a tier, a `WxH` pair of positive integers joined by a
- * lowercase `x`, or `auto` on qwen. The value is passed to the vendor unchanged,
- * so arbitrary ark aspect ratios keep working without a per-vendor whitelist.
+ * lowercase `x`, or `auto` on the openai dialect. The value is passed to the
+ * vendor unchanged, so arbitrary ark aspect ratios keep working without a
+ * per-vendor whitelist.
  */
-export function validateSize(size: string, apiType: Dialect): void {
+export function validateSize(size: string, dialect: Dialect): void {
   const value = size.trim();
+
+  // The native DashScope protocol speaks only `宽*高`; tiers and "auto" are
+  // conveniences the OpenAI-compatible dialect owns. Mapping a tier to pixels
+  // here would be a silent wrong size, so it fails instead.
+  if (dialect === "dashscope") {
+    const native = PIXEL_PAIR.exec(value);
+    if (native !== null && Number(native[1]) > 0 && Number(native[2]) > 0) return;
+    throw new UsageError(
+      `invalid --size ${JSON.stringify(size)}: the dashscope dialect accepts only a WxH pixel pair ` +
+        `like --size 2048x2048; size tiers and "auto" belong to the openai dialect`,
+    );
+  }
 
   if (SIZE_TIERS.includes(value.toUpperCase())) return;
 
   const pair = PIXEL_PAIR.exec(value);
   if (pair !== null && Number(pair[1]) > 0 && Number(pair[2]) > 0) return;
 
-  if (apiType === "qwen" && value.toLowerCase() === "auto") return;
+  if (dialect === "openai" && value.toLowerCase() === "auto") return;
 
   const accepted =
-    apiType === "qwen"
+    dialect === "openai"
       ? `a tier (${SIZE_TIERS.join(", ")}), a WxH pixel pair of positive integers using a lowercase "x" (e.g. 1024x1024), or "auto"`
-      : `a tier (${SIZE_TIERS.join(", ")}) or a WxH pixel pair of positive integers using a lowercase "x" (e.g. 1024x1024); "auto" is qwen-only`;
+      : `a tier (${SIZE_TIERS.join(", ")}) or a WxH pixel pair of positive integers using a lowercase "x" (e.g. 1024x1024); "auto" is openai-only`;
   throw new UsageError(`invalid --size ${JSON.stringify(size)}: expected ${accepted}`);
 }
 
@@ -124,8 +137,7 @@ function validateN(value: number | undefined): number {
   }
   if (n > N_LIMIT) {
     throw new UsageError(
-      `invalid --n ${n}: the limit is ${N_LIMIT} images per run; the accepted range is 1-${N_LIMIT}` +
-        " (ark sends one paid request per image)",
+      `invalid --n ${n}: the limit is ${N_LIMIT} images per run; the accepted range is 1-${N_LIMIT}`,
     );
   }
   return n;
@@ -292,8 +304,8 @@ export async function runGenerate(
   const provider = baseUrl === undefined ? binding.provider : { ...binding.provider, base_url: baseUrl };
   const resolved: typeof binding = { ...binding, provider };
 
-  const adapter = getAdapter(provider.api_type, "image");
-  if (opts.size !== undefined) validateSize(opts.size, provider.api_type);
+  const adapter = getAdapter(binding.dialect, "image");
+  if (opts.size !== undefined) validateSize(opts.size, binding.dialect);
   const model = resolved.model;
 
   // Build once with the raw references so the adapter can reject flags this
@@ -309,7 +321,7 @@ export async function runGenerate(
   ensureOutDir(outDir);
 
   const fanOutRequests =
-    provider.api_type === "ark" && n > 1 ? fanOut(request, n, seed) : [request];
+    binding.dialect === "ark" && n > 1 ? fanOut(request, n, seed) : [request];
   const responses =
     fanOutRequests.length === 1
       ? [await callApi({ binding: resolved, apiKey: auth.key, request: fanOutRequests[0] })]

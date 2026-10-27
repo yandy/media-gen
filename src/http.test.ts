@@ -16,18 +16,20 @@ afterEach(() => {
 function provider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {
     name: "qwen",
-    api_type: "qwen",
+    api_type: "openai",
     base_url: "https://dashscope.example.com",
     ...overrides,
   };
 }
 
 function bindingFor(overrides: Partial<ProviderConfig> = {}, task: Task = "image"): TaskBinding {
+  const providerConfig = provider(overrides);
   return {
-    provider: provider(overrides),
+    provider: providerConfig,
     task,
     model: "qwen-image-3.0",
     timeout_ms: REQUEST_TIMEOUT_MS,
+    dialect: providerConfig.api_type ?? "openai",
   };
 }
 
@@ -38,6 +40,7 @@ function bindingOf(providerConfig: ProviderConfig, task: Task = "image"): TaskBi
     task,
     model: "qwen-image-3.0",
     timeout_ms: REQUEST_TIMEOUT_MS,
+    dialect: providerConfig.api_type ?? "openai",
   };
 }
 
@@ -113,7 +116,7 @@ describe("callApi: the binding decides task and timeout", () => {
         apiKey: API_KEY,
         request: imageRequest(),
       }),
-    ).rejects.toThrow('the "qwen" dialect has no "video" adapter yet');
+    ).rejects.toThrow('the "openai" dialect has no "video" adapter yet');
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -136,6 +139,7 @@ describe("callApi: a task's path override", () => {
         model: "m",
         timeout_ms: REQUEST_TIMEOUT_MS,
         path: "/images/generations",
+        dialect: "ark",
       },
       apiKey: API_KEY,
       request: imageRequest(),
@@ -505,6 +509,38 @@ describe("callApi: the wire", () => {
   });
 });
 
+describe("callApi: a native error body", () => {
+  it("surfaces the code the dashscope dialect reports at the top level", async () => {
+    stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            request_id: "r1",
+            code: "InvalidApiKey",
+            message: "Invalid API-key provided.",
+          }),
+          { status: 401 },
+        ),
+    );
+
+    const error = await rejection(
+      callApi({
+        binding: bindingOf(
+          provider({ name: "gw", api_type: "dashscope", base_url: "https://gw.example.com" }),
+        ),
+        apiKey: API_KEY,
+        request: imageRequest(),
+      }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    // The code only exists when the adapter parsed the envelope; a body excerpt
+    // would carry the text but no code.
+    expect((error as ApiError).code).toBe("InvalidApiKey");
+    expect(error.message).toContain("Invalid API-key provided.");
+  });
+});
+
 describe("callApi: a 404 with an empty body", () => {
   function arkProvider(): ProviderConfig {
     return provider({
@@ -553,6 +589,24 @@ describe("callApi: a 404 with an empty body", () => {
     expect(error.message).toContain("relay.example.com");
     expect(error.message).toContain("[providers.my-qwen]");
     expect(error.message).toContain("maas.aliyuncs.com");
+  });
+
+  it("leaves a dashscope 404 on the normal path, with no workspace-host remedy", async () => {
+    stubFetch(() => new Response("", { status: 404 }));
+
+    const error = await rejection(
+      callApi({
+        binding: bindingOf(
+          provider({ name: "gw", api_type: "dashscope", base_url: "https://gw.example.com" }),
+        ),
+        apiKey: API_KEY,
+        request: imageRequest(),
+      }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toContain("404");
+    expect(error.message).not.toContain("maas.aliyuncs.com");
   });
 
   it("leaves an ark 404 on the normal path", async () => {

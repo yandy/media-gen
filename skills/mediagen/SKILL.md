@@ -25,35 +25,35 @@ file and prints the path. Each successful call is a paid API request.
 ## One-time setup
 
 Nothing is built in: a provider is declared in `config.toml`, which any command
-creates on first use (with two commented entries: `dashscope`, `volcengine`) and
+creates on first use (with two entries, `aliyun` and `volcengine`, plus commented
+examples for a gateway) and
 then validates before it runs.
 
 ```bash
 mediagen config show        # prints what resolves; any command creates config.toml on first use
 ```
 
-`base_url` is the origin: the dialect appends the endpoint path, version segment
-included, per task. qwen needs its workspace-scoped host, and the public host 404s,
-so the seeded `[providers.dashscope].base_url` is a placeholder you must finish:
-replace `<workspace-id>` with your workspace id, e.g.
-`https://abc123.cn-beijing.maas.aliyuncs.com` (ark's seed is usable as written).
-Until then, `image generate` and `image edit` against that provider exit 1 without
-sending anything; `config show`, `config path` and `auth status` still work, and
-`login` exits 2 with the same message.
+`base_url` is the origin: the protocol appends the endpoint path, version segment
+included, per task. Both seeded entries run as written: `volcengine` on Ark, `aliyun`
+on Bailian's native protocol (`api_type = "dashscope"`), which the public host serves.
+Bailian's OpenAI-compatible endpoint (`compatible-mode`) is only served on a
+workspace-scoped host — switch `base_url` to
+`https://{workspace-id}.cn-beijing.maas.aliyuncs.com` if you want that protocol. A
+`base_url` still containing `<...>` is rejected before sending anything.
 
 Each provider holds `models = [...]` per task, and a model that is not listed there is
 refused before anything is sent: add the id to that list instead of creating another
 provider. To add another entry without hand-editing:
 
 ```bash
-mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com \
+mediagen config add my-proxy --api-type openai --base-url https://proxy.example.com \
   --model qwen-image-3.0 --api-key-env MY_PROXY_KEY     # --task video for a video table
 ```
 
 Then store keys:
 
 ```bash
-mediagen login --provider dashscope --api-key sk-...   # auth.json in ~/.local/state, mode 600
+mediagen login --provider aliyun --api-key sk-...      # auth.json in ~/.local/state, mode 600
 mediagen login --provider volcengine --api-key sk-...
 mediagen auth status                                   # which key each provider would use
 ```
@@ -68,7 +68,7 @@ masked.
 
 ```bash
 # text to image; files land in --out-dir (default: output_dir in config.toml, else the cwd)
-# --provider names an entry in config.toml; dashscope needs its workspace base_url first
+# --provider names an entry in config.toml; aliyun needs its workspace base_url first
 mediagen image generate "a red fox in fresh snow, soft morning light" --out-dir ./out
 
 # edit one local image (local paths are read and sent as base64 data URLs)
@@ -89,21 +89,24 @@ absolute file path per line and warnings go to stderr.
 
 | model | how to select | pick it when |
 |---|---|---|
-| `qwen-image-3.0` | `--provider dashscope` (the default; needs its workspace `base_url`) | text rendering (CJK + Latin) and image editing |
+| `qwen-image-3.0` | `--provider aliyun` (needs its workspace `base_url`) | text rendering (CJK + Latin) and image editing |
 | seedream 5.0 flash | `--provider volcengine` | speed: drafts, iteration, many variants |
 | seedream 5.0 pro | `--provider volcengine --model doubao-seedream-5-0-pro` | highest quality; slower and more expensive |
 
-`dashscope` / `volcengine` are the two names the first run writes into
+`aliyun` / `volcengine` are the two names the first run writes into
 `config.toml`; they are the seed's choices, not built-ins. A model is usable only
 if it is listed in `models = [...]` under that provider's `image` table, so vendor
 ids — dated snapshots that roll forward — are refreshed by editing that list (and
 `default`); `--model` picks among the listed ids, and anything else exits 1 before
-sending. `--provider` picks the account, and the account's `api_type` picks the
-dialect and response shape.
+sending. `--provider` picks the account; the **task table's `api_type`** picks the
+protocol and with it the request body and response shape (`openai`, `dashscope`,
+`ark`; `qwen` is a deprecated alias of `openai`). Flags a protocol does not accept
+fail before any paid request.
 
 ## Counting images
 
-`--n` accepts 1-6 (else exit 2). qwen returns them from one request; **ark fans
+`--n` accepts 1-6 (else exit 2). `openai` and `dashscope` return them from one
+request; **ark fans
 out into one paid request per image** (seeded `seed`, `seed+1`, ...), so `--n 4`
 on ark costs four requests. Keep `--n` at 1 while iterating on a prompt.
 

@@ -319,7 +319,7 @@ describe("smoke: the seeded config", () => {
     expect(config.providers.volcengine.tasks.video?.models).toEqual(["doubao-seedance-1-0-pro"]);
   });
 
-  it("keeps the unedited dashscope placeholder from blocking volcengine", async () => {
+  it("keeps an unusable aliyun entry from blocking volcengine", async () => {
     const calls = stubFetch(() =>
       new Response(
         JSON.stringify({ data: [{ url: IMAGE_URL }] }),
@@ -338,11 +338,9 @@ describe("smoke: the seeded config", () => {
     ]);
 
     expect(code).toBe(0);
-    // The dashscope entry is still `<workspace-id>`; it must not matter here.
+    // The aliyun entry has no key here; a provider the run does not use must not
+    // matter.
     expect(calls[0]?.url).toBe(ARK_URL);
     expect(fs.readdirSync(seededOut)).toHaveLength(1);
-    expect(fs.readFileSync(path.join(configDir, "config.toml"), "utf8")).toContain(
-      "<workspace-id>",
-    );
   });
 });

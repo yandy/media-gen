@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authPath, loadAuth } from "./auth.js";
 import { createProgram, main, requestsHelpOrVersion, type CliDeps } from "./cli.js";
 import { configPath, loadConfig } from "./config.js";
+import { SEED_CONFIG } from "./providers.js";
 
 const API_KEY = "sk-test1234567890";
 /** maskKey() shows the first four and last four characters only. */
@@ -390,6 +391,107 @@ describe("mediagen config path", () => {
   });
 });
 
+describe("help examples name providers that exist", () => {
+  /** Every provider name the seed mentions, including its commented examples. */
+  function knownNames(): Set<string> {
+    const names = new Set<string>();
+    for (const match of SEED_CONFIG.matchAll(/^\s*#?\s*\[providers\.([^\].]+)\]/gm)) {
+      names.add(match[1] ?? "");
+    }
+    return names;
+  }
+
+  it("uses no provider name outside the seed in either help text", async () => {
+    const known = knownNames();
+    for (const argv of [["image", "generate", "--help"], ["image", "edit", "--help"]]) {
+      const result = await run(argv);
+      const exampleLines = result.stdout
+        .split("\n")
+        .filter((line) => line.trimStart().startsWith("mediagen "));
+      const referenced = exampleLines
+        .flatMap((line) => [...line.matchAll(/--provider ('[^']+'|\S+)/g)])
+        .map((match) => (match[1] ?? "").replace(/^'|'$/g, ""));
+      expect(referenced.length).toBeGreaterThan(0);
+      for (const name of referenced) expect(known).toContain(name);
+    }
+  });
+});
+
+describe("config show: deprecated aliases and missing protocols", () => {
+  it("marks a provider-declared qwen as the deprecated alias of openai", async () => {
+    writeConfig(
+      '[providers.legacy]\napi_type = "qwen"\nbase_url = "https://gw.example.com"\n\n[providers.legacy.image]\ndefault = "m"\nmodels = ["m"]\n',
+    );
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toMatch(/api_type: openai \(config\.toml\); declared as the deprecated alias "qwen"/);
+  });
+
+  it("marks a task-declared qwen the same way", async () => {
+    writeConfig(
+      '[providers.legacy]\nbase_url = "https://gw.example.com"\n\n[providers.legacy.image]\napi_type = "qwen"\ndefault = "m"\nmodels = ["m"]\n',
+    );
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toMatch(/api_type: openai \(config\.toml\); declared as the deprecated alias "qwen"/);
+  });
+
+  it("reports api_type as missing when neither the account nor a task declares one", async () => {
+    writeConfig(
+      '[providers.half]\nbase_url = "https://gw.example.com"\n\n[providers.half.image]\ndefault = "m"\nmodels = ["m"]\n',
+    );
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("missing: api_type");
+  });
+
+  it("says so when config add translated the deprecated alias", async () => {
+    const result = await run([
+      "config", "add",
+      "oldname",
+      "--api-type", "qwen",
+      "--base-url", "https://gw.example.com",
+      "--model", "m",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toContain('api_type "qwen" is a deprecated alias');
+    expect(result.stderr).toContain('writing api_type = "openai"');
+  });
+});
+
+describe("mediagen config add: where the protocol is written", () => {
+  it("writes api_type into the task table, not the provider table", async () => {
+    const result = await run([
+      "config",
+      "add",
+      "gw",
+      "--api-type",
+      "dashscope",
+      "--base-url",
+      "https://gw.example.com",
+      "--model",
+      "qwen-image-2.0-pro",
+    ]);
+
+    expect(result.code).toBe(0);
+    const text = readConfig();
+    const providerTable = text.slice(
+      text.indexOf("[providers.gw]"),
+      text.indexOf("[providers.gw.image]"),
+    );
+    expect(providerTable).not.toContain("api_type");
+    expect(text).toContain('api_type = "dashscope"');
+    expect(loadConfig().providers.gw?.tasks.image?.api_type).toBe("dashscope");
+  });
+});
+
 describe("mediagen config show", () => {
   it("never writes the file it reads", async () => {
     writeConfig('default_provider = "mine"\n');
@@ -413,9 +515,7 @@ describe("mediagen config show", () => {
     expect(result.stdout).toContain(configPath());
     expect(result.stdout).toMatch(/default_provider:\s+volcengine \(config\.toml\)/);
     expect(result.stdout).toMatch(/output_dir:\s+\S+ \(default/);
-    expect(result.stdout).toContain(
-      "https://<workspace-id>.cn-beijing.maas.aliyuncs.com (config.toml)",
-    );
+    expect(result.stdout).toContain("https://dashscope.aliyuncs.com (config.toml)");
     expect(result.stdout).toContain("https://ark.cn-beijing.volces.com (config.toml)");
     expect(result.stdout).toContain(`${ARK_URL} (computed)`);
     expect(result.stdout).toMatch(/not set/);
@@ -464,6 +564,28 @@ models = ["some-model"]
     expect(result.stdout).toContain("doubao-seedream-5-0-pro-260628 (config.toml)");
     expect(result.stdout).toContain("my-proxy");
     expect(result.stdout).toContain("https://proxy.example.com (config.toml)");
+  });
+
+  it("shows the protocol each task resolved to, with the provider default as fallback", async () => {
+    writeConfig(
+      '[providers.gw]\napi_type = "openai"\nbase_url = "https://gw.example.com"\n\n[providers.gw.image]\napi_type = "ark"\ndefault = "m"\nmodels = ["m"]\n\n[providers.gw.video]\ndefault = "v"\nmodels = ["v"]\n',
+    );
+
+    const result = await run(["config", "show", "--json"]);
+
+    expect(result.code).toBe(0);
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+    const gw = (payload.providers as Record<string, unknown>[]).find((entry) => entry.name === "gw");
+    const tasks = gw?.tasks as Record<string, unknown>[];
+    const image = tasks.find((task) => task.task === "image");
+    const video = tasks.find((task) => task.task === "video");
+    expect(image?.api_type).toEqual({ value: "ark", source: "config.toml" });
+    expect(image?.endpoint).toBe("https://gw.example.com/api/v3/images/generations");
+    expect(video?.api_type).toEqual({
+      value: "openai",
+      source: "default",
+      note: "provider default",
+    });
   });
 
   it("emits the resolved config as JSON with masked keys", async () => {
@@ -1084,12 +1206,14 @@ describe("mediagen logout", () => {
 });
 
 describe("mediagen image generate", () => {
-  it("refuses to send a request while the qwen placeholder is unedited", async () => {
-    fs.rmSync(configPath(), { force: true });
+  it("refuses to send a request while a base_url placeholder is unedited", async () => {
+    writeConfig(
+      '[providers.aliyun]\nbase_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"\napi_key_env = "DASHSCOPE_API_KEY"\n\n[providers.aliyun.image]\napi_type = "openai"\ndefault = "qwen-image-3.0"\nmodels = ["qwen-image-3.0"]\n',
+    );
     process.env.DASHSCOPE_API_KEY = API_KEY;
     const { calls } = stubFetch(() => apiResponse([{ url: "https://cdn.example.com/a.png" }]));
 
-    const result = await run(["image", "generate", "a red fox", "--provider", "dashscope"]);
+    const result = await run(["image", "generate", "a red fox", "--provider", "aliyun"]);
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("workspace-id");
@@ -1470,7 +1594,9 @@ models = ["doubao-seedance-1-0-pro"]
     ]);
 
     expect(result.code).toBe(0);
+    // --api-type qwen is the deprecated alias; the file records the real name.
     expect(loadConfig().providers["my-proxy"].tasks.image).toEqual({
+      api_type: "openai",
       default: "qwen-image-3.0",
       models: ["qwen-image-3.0"],
     });
@@ -1489,6 +1615,7 @@ models = ["doubao-seedance-1-0-pro"]
 
     expect(result.code).toBe(0);
     expect(loadConfig().providers.vid.tasks.video).toEqual({
+      api_type: "ark",
       default: "doubao-seedance-1-0-pro",
       models: ["doubao-seedance-1-0-pro"],
     });
@@ -1511,10 +1638,12 @@ models = ["doubao-seedance-1-0-pro"]
   });
 
   it("does not confuse an unfinished base_url with a missing adapter", async () => {
-    // The seed's qwen host is still <workspace-id>, so the endpoint cannot be
-    // computed — but the qwen dialect *does* have an image adapter, and saying
-    // "(no adapter yet)" there would send the user hunting for a code change.
-    fs.rmSync(configPath(), { force: true });
+    // A hand-written `<workspace-id>` host cannot produce an endpoint — but the
+    // openai dialect *does* have an image adapter, and "(no adapter yet)" there
+    // would send the user hunting for a code change.
+    writeConfig(
+      '[providers.aliyun]\nbase_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"\napi_key_env = "DASHSCOPE_API_KEY"\n\n[providers.aliyun.image]\napi_type = "openai"\ndefault = "qwen-image-3.0"\nmodels = ["qwen-image-3.0"]\n\n[providers.aliyun.video]\napi_type = "dashscope"\ndefault = "qwen-video"\nmodels = ["qwen-video"]\n',
+    );
 
     const result = await run(["config", "show"]);
 
@@ -1586,7 +1715,7 @@ models = ["m"]
     ]);
 
     expect(result.code).toBe(0);
-    expect(result.stderr).toContain('no dialect has a "video" adapter yet');
+    expect(result.stderr).toContain('the "ark" dialect has no "video" adapter yet');
   });
 
   it("shows each provider's tasks and marks the one with no adapter", async () => {
