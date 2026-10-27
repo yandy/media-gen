@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configDir,
   configPath,
+  ensureConfigFile,
   loadConfig,
+  prepareConfigFile,
   resolveProvider,
   type MediagenConfig,
 } from "./config.js";
@@ -78,20 +80,14 @@ describe("configDir", () => {
 });
 
 describe("loadConfig", () => {
-  it("writes the seed config on first load and reads it back", () => {
+  it("creates nothing on its own", () => {
     expect(fs.existsSync(configPath())).toBe(false);
 
     const config = loadConfig();
 
-    expect(fs.existsSync(configPath())).toBe(true);
-    expect(config.default_provider).toBe("dashscope");
-    expect(Object.keys(config.providers).sort()).toEqual(["dashscope", "volcengine"]);
-    expect(config.providers.dashscope).toEqual({
-      api_type: "qwen",
-      base_url: "https://dashscope.aliyuncs.com",
-      model: "qwen-image-3.0",
-      api_key_env: "DASHSCOPE_API_KEY",
-    });
+    expect(fs.existsSync(configPath())).toBe(false);
+    expect(config.default_provider).toBe("");
+    expect(config.providers).toEqual({});
   });
 
   it("never overwrites an existing config.toml", () => {
@@ -183,16 +179,90 @@ describe("loadConfig", () => {
   });
 });
 
+describe("prepareConfigFile", () => {
+  it("writes the seed config and reads it back", () => {
+    expect(fs.existsSync(configPath())).toBe(false);
+
+    prepareConfigFile();
+
+    expect(fs.existsSync(configPath())).toBe(true);
+    const config = loadConfig();
+    expect(config.default_provider).toBe("dashscope");
+    expect(Object.keys(config.providers).sort()).toEqual(["dashscope", "volcengine"]);
+    expect(config.providers.dashscope).toEqual({
+      api_type: "qwen",
+      base_url: "https://dashscope.aliyuncs.com",
+      model: "qwen-image-3.0",
+      api_key_env: "DASHSCOPE_API_KEY",
+    });
+  });
+
+  it("validates an existing file and leaves its bytes alone", () => {
+    writeConfig('default_provider = "mine"\n');
+
+    prepareConfigFile();
+
+    expect(fs.readFileSync(configPath(), "utf8")).toBe('default_provider = "mine"\n');
+  });
+});
+
 describe("ensureConfigFile", () => {
-  it("still returns a usable config when the seed cannot be written", () => {
+  it("throws a ConfigError naming the path and the remedy when the seed cannot be written", () => {
     const blocker = path.join(tempDir, "blocker");
     fs.writeFileSync(blocker, "");
-    process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(blocker, "config");
+    const blockedDir = path.join(blocker, "config");
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = blockedDir;
 
-    const config = loadConfig();
+    const error = thrownBy(() => ensureConfigFile());
 
-    expect(config.providers).toEqual({});
-    expect(fs.existsSync(configPath())).toBe(false);
+    expect(error).toBeInstanceOf(ConfigError);
+    expect(error.message).toContain(path.join(blockedDir, "config.toml"));
+    expect(error.message).toMatch(/ENOTDIR|EACCES|EROFS|ENOSPC/);
+    expect(error.message).toContain("MEDIAGEN_CLI_CONFIG_DIR");
+  });
+
+  it("does nothing when config.toml already exists", () => {
+    writeConfig('default_provider = "mine"\n');
+
+    ensureConfigFile();
+
+    expect(fs.readFileSync(configPath(), "utf8")).toBe('default_provider = "mine"\n');
+  });
+
+  it("removes the truncated file and reports the errno when the write fails after the create", () => {
+    const blockedDir = path.join(tempDir, "config");
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = blockedDir;
+    const file = path.join(blockedDir, "config.toml");
+
+    // A real ENOSPC/EDQUOT needs a full or quota-capped filesystem, so the one
+    // failure shape that leaves a file behind is simulated: open succeeded, the
+    // write threw. A truncated seed parses as a valid config with no providers,
+    // which is the state this whole bootstrap change exists to eliminate.
+    const realWrite = fs.writeFileSync;
+    const spy = vi.spyOn(fs, "writeFileSync").mockImplementation(((
+      target: fs.PathOrFileDescriptor,
+      data: string | NodeJS.ArrayBufferView,
+      options?: fs.WriteFileOptions,
+    ) => {
+      realWrite(target, typeof data === "string" ? data.slice(0, 240) : data, options);
+      const error = new Error("no space left on device") as NodeJS.ErrnoException;
+      error.code = "ENOSPC";
+      throw error;
+    }) as typeof fs.writeFileSync);
+
+    try {
+      const error = thrownBy(() => ensureConfigFile());
+
+      expect(error).toBeInstanceOf(ConfigError);
+      expect(error.message).toContain(file);
+      expect(error.message).toContain("ENOSPC");
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The half-written seed must not survive: the next run would read it as
+    // "no providers configured" and never rewrite it.
+    expect(fs.existsSync(file)).toBe(false);
   });
 });
 

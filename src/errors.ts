@@ -84,3 +84,18 @@ export function unreadableFileMessage(file: string, error: unknown): string {
   const code = fieldsOf(error)?.code;
   return `cannot read ${file} (${typeof code === "string" ? code : "unreadable"}): check that it is a readable file`;
 }
+
+/**
+ * Builds the message for a config file that could not be created. The path is
+ * part of the message on purpose: when the bootstrap fails, `config path` fails
+ * with it, so this is the only place the user learns where the file should live.
+ * The errno code is kept and the raw `fs` text dropped, matching
+ * `unreadableFileMessage`.
+ */
+export function unwritableFileMessage(file: string, error: unknown): string {
+  const code = fieldsOf(error)?.code;
+  return (
+    `cannot create ${file} (${typeof code === "string" ? code : "unwritable"}): ` +
+    'point MEDIAGEN_CLI_CONFIG_DIR at a writable directory, or fix the permissions on the directory that holds this file'
+  );
+}

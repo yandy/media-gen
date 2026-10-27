@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parse, type TomlTable } from "smol-toml";
-import { ConfigError, malformedDocumentMessage, unreadableFileMessage } from "./errors.js";
+import { ConfigError, malformedDocumentMessage, unreadableFileMessage, unwritableFileMessage } from "./errors.js";
 import { DIALECT_DEFAULT_PATHS, SEED_CONFIG } from "./providers.js";
 import { shellArg, tomlKey } from "./toml.js";
 import type { Dialect, ProviderConfig } from "./types.js";
@@ -76,9 +76,10 @@ export function writeConfigFile(text: string): string {
  * run leaves the user something with comments to edit rather than a command
  * that fails on an empty store.
  *
- * Best effort: a read-only or otherwise unwritable config dir must not stop the
- * read-only commands (`config show`, `auth status`, `config path`). When the
- * write fails the caller simply sees an empty provider table.
+ * Called from the bootstrap stage in `main()`, which runs before any command is
+ * dispatched. A config dir that cannot be written is a hard failure: the user
+ * gets a `ConfigError` naming the path and the way out, rather than every later
+ * command failing for a reason that looks like "no providers configured".
  */
 export function ensureConfigFile(): void {
   const file = configPath();
@@ -89,15 +90,35 @@ export function ensureConfigFile(): void {
     // "wx" fails instead of truncating, so a concurrent run that is already
     // writing a config is never clobbered by the seed.
     fs.writeFileSync(file, SEED_CONFIG, { flag: "wx" });
-  } catch {
-    // Best effort: losing the seed is recoverable by editing the path by hand,
-    // while throwing here would make every command unusable.
+  } catch (error) {
+    // Only losing the create race is success: "wx" fails with EEXIST when a
+    // concurrent run wrote the file first. Any other failure (ENOSPC, EDQUOT,
+    // EIO) may have left a truncated seed behind, and a truncated seed parses as
+    // a valid config with no providers — the exact state that never repairs
+    // itself, because the seed is only ever written when the file is absent.
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EEXIST" && fs.existsSync(file)) return;
+    try {
+      fs.unlinkSync(file);
+    } catch {
+      // The file may never have been created.
+    }
+    throw new ConfigError(unwritableFileMessage(file, error));
   }
 }
 
-export function loadConfig(): MediagenConfig {
+/**
+ * The one place that decides config.toml exists and parses. `main()` calls it
+ * before commander dispatches, so every command sees the same file: created when
+ * absent, validated when present, and a `ConfigError` otherwise. Commands then
+ * read it with `loadConfig()`, which never writes.
+ */
+export function prepareConfigFile(): void {
   ensureConfigFile();
+  loadConfig();
+}
 
+export function loadConfig(): MediagenConfig {
   const file = configPath();
   if (!fs.existsSync(file)) {
     return { default_provider: "", output_dir: process.cwd(), providers: {} };

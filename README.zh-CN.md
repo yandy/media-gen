@@ -8,7 +8,8 @@
 ```bash
 npm install -g @yandy0725/mediagen-cli
 
-# 第一次运行会写出一份带注释的 config.toml，直接编辑它
+# 任何命令首次运行都会写出一份带注释的 config.toml；之后每次运行都会先校验它，
+# config show 本身只读。直接编辑这个文件即可
 mediagen config show
 
 # 新增一条入口（同一个方言可以有多条，宿主和模型各自不同）

@@ -19,6 +19,7 @@ import {
   configPath,
   loadConfig,
   noProviderSelectedMessage,
+  prepareConfigFile,
   resolveProvider,
   writeConfigFile,
   type MediagenConfig,
@@ -118,7 +119,7 @@ const ROOT_HELP = `
 Built for AI agents: explicit flags, no interactive prompts, machine-readable output.
 
 Quickstart:
-  mediagen config show                                    # first run writes a commented config.toml
+  mediagen config show                                    # any command creates config.toml on first use
   mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com --model qwen-image-3.0
   mediagen login --provider my-proxy --api-key sk-...      # store a key in auth.json
   mediagen image generate "a red fox in fresh snow" --provider my-proxy --out-dir ./out
@@ -365,8 +366,31 @@ export function createProgram(options: ProgramOptions = {}): Command {
 }
 
 /**
+ * `--help` and `--version` must work when config.toml is broken or cannot be
+ * created, so they skip the bootstrap. Commander's implicit `help` command is
+ * exempt too: it is printed in the CLI's own command list, so a user whose config
+ * is broken will reach for it. The scan stops at `--` so a prompt that happens to
+ * read "--help" (`image generate -- --help`) is not mistaken for a request for
+ * help.
+ */
+export function requestsHelpOrVersion(argv: string[]): boolean {
+  // `help [command]` only exists as the first token; anything later is a value.
+  if (argv[0] === "help") return true;
+
+  for (const arg of argv) {
+    if (arg === "--") return false;
+    if (arg === "-h" || arg === "--help" || arg === "-V" || arg === "--version") return true;
+  }
+  return false;
+}
+
+/**
  * Runs the CLI and returns the exit code without ever calling `process.exit`,
  * so tests can drive it in-process and the bin wrapper owns the exit.
+ *
+ * The bootstrap stage runs before commander dispatches: config.toml is created
+ * when absent and validated when present, so every command sees the same file
+ * and a broken one is reported as a `ConfigError` before any command logic runs.
  */
 export async function main(argv: string[], deps: CliDeps = {}): Promise<number> {
   // Commander's own diagnostics are buffered so that a usage error can still be
@@ -374,6 +398,8 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
   const buffer: string[] = [];
 
   try {
+    if (!requestsHelpOrVersion(argv)) prepareConfigFile();
+
     const program = createProgram({
       deps,
       writeOut: (text) => buffer.push(text),
@@ -720,8 +746,8 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
   }
 
   const file = configPath();
-  // loadConfig() also seeds the file when it is absent, so the append below sees
-  // the same surroundings the user will.
+  // The bootstrap in main() already created and validated this file, so the
+  // append below sees exactly what the user will edit.
   const config = loadConfig();
   if (Object.hasOwn(config.providers, provider)) {
     // True whether the name is a real entry or a table that already nests one
@@ -794,7 +820,7 @@ function runConfigShow(flags: { json?: boolean }): void {
   }
 
   const lines = [
-    `config file: ${file} (${exists ? "loaded" : "could not be created"})`,
+    `config file: ${file} (loaded)`,
     `default_provider: ${
       defaultProvider.value === "" ? `(not set) (${defaultProvider.source})` : show(defaultProvider)
     }`,

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authPath, loadAuth } from "./auth.js";
-import { createProgram, main, type CliDeps } from "./cli.js";
+import { createProgram, main, requestsHelpOrVersion, type CliDeps } from "./cli.js";
 import { configPath } from "./config.js";
 
 const API_KEY = "sk-test1234567890";
@@ -265,6 +265,79 @@ describe("image help text", () => {
   });
 });
 
+describe("config bootstrap", () => {
+  it("creates config.toml before a command that does not read it runs", async () => {
+    expect(fs.existsSync(configPath())).toBe(false);
+
+    const result = await run(["config", "path"]);
+
+    expect(result.code).toBe(0);
+    expect(fs.existsSync(configPath())).toBe(true);
+  });
+
+  it("fails before dispatch when config.toml is malformed, even for config path", async () => {
+    writeConfig('[providers.qwen\nbase_url = "https://x"\n');
+
+    const result = await run(["config", "path"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("invalid TOML");
+    expect(result.stderr).toContain(configPath());
+  });
+
+  it("still serves --help when config.toml is malformed", async () => {
+    writeConfig('[providers.qwen\nbase_url = "https://x"\n');
+
+    const result = await run(["--help"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Quickstart");
+  });
+
+  it("still serves a subcommand's --help when config.toml is malformed", async () => {
+    writeConfig('[providers.qwen\nbase_url = "https://x"\n');
+
+    const result = await run(["image", "generate", "--help"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Models");
+  });
+
+  it("still serves the implicit help command when config.toml is malformed", async () => {
+    writeConfig('[providers.qwen\nbase_url = "https://x"\n');
+
+    const result = await run(["help"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Usage: mediagen");
+  });
+});
+
+describe("requestsHelpOrVersion", () => {
+  it("treats the help and version flags as exempt", () => {
+    expect(requestsHelpOrVersion(["--help"])).toBe(true);
+    expect(requestsHelpOrVersion(["-h"])).toBe(true);
+    expect(requestsHelpOrVersion(["image", "generate", "--help"])).toBe(true);
+    expect(requestsHelpOrVersion(["--version"])).toBe(true);
+    expect(requestsHelpOrVersion(["-V"])).toBe(true);
+  });
+
+  it("does not treat a prompt after -- as a help request", () => {
+    expect(requestsHelpOrVersion(["image", "generate", "--", "--help"])).toBe(false);
+  });
+
+  it("treats commander's implicit help command as exempt", () => {
+    expect(requestsHelpOrVersion(["help"])).toBe(true);
+    expect(requestsHelpOrVersion(["help", "image", "generate"])).toBe(true);
+  });
+
+  it("is false for ordinary commands", () => {
+    expect(requestsHelpOrVersion(["config", "show"])).toBe(false);
+    expect(requestsHelpOrVersion([])).toBe(false);
+  });
+});
+
 describe("mediagen config path", () => {
   it("prints only the config path", async () => {
     const result = await run(["config", "path"]);
@@ -286,6 +359,19 @@ describe("mediagen config path", () => {
 });
 
 describe("mediagen config show", () => {
+  it("never writes the file it reads", async () => {
+    writeConfig('default_provider = "mine"\n');
+    const before = fs.readFileSync(configPath(), "utf8");
+    const mtimeBefore = fs.statSync(configPath()).mtimeMs;
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(fs.readFileSync(configPath(), "utf8")).toBe(before);
+    expect(fs.statSync(configPath()).mtimeMs).toBe(mtimeBefore);
+    expect(result.stdout).toContain("(loaded)");
+  });
+
   it("prints the seeded configuration with a source note for each value", async () => {
     const result = await run(["config", "show"]);
 
@@ -499,8 +585,10 @@ describe("mediagen config add: value hygiene", () => {
 
     expect(result.code).toBe(2);
     expect(result.stderr).toContain(flag);
-    // A rejected command leaves the filesystem alone, so config.toml is never created.
-    expect(fs.existsSync(configPath())).toBe(false);
+    // The bootstrap creates the seed config before dispatch; a rejected command
+    // must still not add a provider table to it.
+    expect(fs.existsSync(configPath())).toBe(true);
+    expect(readConfig()).not.toContain("[providers.p1]");
   });
 
   it("rejects a blank provider name", async () => {
@@ -510,7 +598,8 @@ describe("mediagen config add: value hygiene", () => {
 
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("name");
-    expect(fs.existsSync(configPath())).toBe(false);
+    // The bootstrap leaves the seed untouched; no nameless table is appended.
+    expect(readConfig()).toContain("[providers.dashscope]");
   });
 
   it("leaves no temporary file behind", async () => {
@@ -563,16 +652,33 @@ describe("mediagen config add: protecting the file", () => {
   });
 });
 
-describe("mediagen config show: unreadable config dir", () => {
-  it("still prints the empty-provider hint instead of failing", async () => {
+describe("mediagen config: unwritable config dir", () => {
+  it("fails with the path and the remedy instead of pretending there is no config", async () => {
     const blocker = path.join(tempDir, "blocker");
     fs.writeFileSync(blocker, "");
-    process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(blocker, "config");
+    const blockedDir = path.join(blocker, "config");
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = blockedDir;
 
     const result = await run(["config", "show"]);
 
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain("none; run");
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(path.join(blockedDir, "config.toml"));
+    expect(result.stderr).toContain("MEDIAGEN_CLI_CONFIG_DIR");
+    expect(result.stderr).not.toContain("none; run");
+  });
+
+  it("keeps the --json error machine-readable", async () => {
+    const blocker = path.join(tempDir, "blocker");
+    fs.writeFileSync(blocker, "");
+    const blockedDir = path.join(blocker, "config");
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = blockedDir;
+
+    const result = await run(["config", "show", "--json"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as { error: { message: string } };
+    expect(parsed.error.message).toContain(path.join(blockedDir, "config.toml"));
   });
 });
 
@@ -634,7 +740,8 @@ describe("remedy messages", () => {
   it("wraps an unwritable config dir instead of leaking the raw fs error", async () => {
     const blocker = path.join(tempDir, "blocker");
     fs.writeFileSync(blocker, "");
-    process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(blocker, "config");
+    const blockedDir = path.join(blocker, "config");
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = blockedDir;
 
     const result = await run([
       "config", "add", "p1",
@@ -642,9 +749,12 @@ describe("remedy messages", () => {
     ]);
 
     expect(result.code).toBe(1);
-    // Wrapped in a ConfigError naming the file, not a bare fs error on its own.
-    expect(result.stderr).toContain("cannot write");
-    expect(result.stderr).toContain(configPath());
+    // Wrapped in a ConfigError naming the file and the errno code, not a raw
+    // "open '/…' " dump with syscall details.
+    expect(result.stderr).toContain("cannot create");
+    expect(result.stderr).toContain(path.join(blockedDir, "config.toml"));
+    expect(result.stderr).toMatch(/ENOTDIR|EACCES|EROFS/);
+    expect(result.stderr).not.toContain("syscall");
   });
 });
 
