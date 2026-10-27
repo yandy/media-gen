@@ -168,6 +168,7 @@ export function parseArkResponse(json: unknown, requestId?: string): ParsedRespo
 }
 
 export const ArkDialect: DialectAdapter = {
+  path: "/images/generations",
   buildRequest: buildArkRequest,
   parseResponse: parseArkResponse,
 };

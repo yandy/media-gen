@@ -16,7 +16,7 @@ import type {
   ProviderConfig,
   SavedFile,
 } from "./types.js";
-import { nowStamp, toImageInput } from "./util.js";
+import { normalizeHttpBaseUrl, nowStamp, toImageInput } from "./util.js";
 
 export interface GenerateOptions {
   provider?: string;
@@ -94,24 +94,14 @@ function expandHome(value: string, home: string): string {
   return value;
 }
 
-function isHttpUrl(value: string): boolean {
-  try {
-    const protocol = new URL(value).protocol;
-    return protocol === "http:" || protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 function normalizeBaseUrl(value: string): string {
-  if (!isHttpUrl(value)) {
+  const normalized = normalizeHttpBaseUrl(value);
+  if (normalized === undefined) {
     throw new UsageError(
-      `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) URL`,
+      `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) URL without credentials, query or fragment`,
     );
   }
-
-  // Trailing slashes would double up with the provider path.
-  return value.replace(/\/+$/, "");
+  return normalized;
 }
 
 function validateN(value: number | undefined): number {

@@ -32,9 +32,11 @@ beforeEach(() => {
   configHome = path.join(tempDir, "config");
   outDir = path.join(tempDir, "out");
   process.env.MEDIAGEN_CLI_CONFIG_DIR = configHome;
-  // These tests drive runGenerate() directly, bypassing main()'s bootstrap, so
-  // the seed config has to be written here — exactly what a real run gets.
-  prepareConfigFile();
+  // These tests drive runGenerate() directly, bypassing main()'s bootstrap, so a
+  // config has to exist here. It is the documented shape with real base URLs: the
+  // seed's qwen entry is a placeholder the user must edit, which config.test.ts
+  // and cli.test.ts cover.
+  writeConfigFor("");
 });
 
 afterEach(() => {
@@ -183,13 +185,13 @@ function writeConfigFor(extra: string): void {
       "",
       "[providers.dashscope]",
       'api_type = "qwen"',
-      'base_url = "https://dashscope.aliyuncs.com"',
+      'base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"',
       'model = "qwen-image-3.0"',
       'api_key_env = "DASHSCOPE_API_KEY"',
       "",
       "[providers.volcengine]",
       'api_type = "ark"',
-      'base_url = "https://ark.cn-beijing.volces.com"',
+      'base_url = "https://ark.cn-beijing.volces.com/api/v3"',
       'model = "doubao-seedream-5-0-flash-260915"',
       'api_key_env = "ARK_API_KEY"',
       "",
@@ -365,7 +367,7 @@ describe("runGenerate", () => {
   it("names the provider in the missing-key error", async () => {
     writeConfig(`
 [providers.my-proxy]
-base_url = "https://proxy.example.com"
+base_url = "https://proxy.example.com/api/v3"
 api_type = "ark"
 model = "some-model"
 api_key_env = "MY_PROXY_KEY"
@@ -566,21 +568,21 @@ api_key_env = "MY_PROXY_KEY"
 
     const result = await runGenerate(
       "a cat",
-      options({ baseUrl: "https://proxy.example.com" }),
+      options({ baseUrl: "https://proxy.example.com/compatible-mode/v1" }),
       QWEN_ENV,
     );
 
     expect(stub.calls[0]?.url).toBe("https://proxy.example.com/compatible-mode/v1/images/generations");
-    expect(result.provider.base_url).toBe("https://proxy.example.com");
+    expect(result.provider.base_url).toBe("https://proxy.example.com/compatible-mode/v1");
     // Loading may seed config.toml; the one-off --base-url must not be written into it.
     const written = fs.readFileSync(path.join(configHome, "config.toml"), "utf8");
-    expect(written).not.toMatch(/^base_url = "https:\/\/proxy\.example\.com"$/m);
+    expect(written).not.toMatch(/^base_url = "https:\/\/proxy\.example\.com\/compatible-mode\/v1"$/m);
   });
 
   it("joins a --base-url that carries a trailing slash exactly once", async () => {
     const stub = stubFetch(() => apiResponse([imageItem("proxy")]));
 
-    await runGenerate("a cat", options({ baseUrl: "https://proxy.example.com/" }), QWEN_ENV);
+    await runGenerate("a cat", options({ baseUrl: "https://proxy.example.com/compatible-mode/v1/" }), QWEN_ENV);
 
     expect(stub.calls[0]?.url).toBe("https://proxy.example.com/compatible-mode/v1/images/generations");
   });

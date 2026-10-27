@@ -14,7 +14,7 @@ mediagen config show
 
 # 新增一条入口（同一个方言可以有多条，宿主和模型各自不同）
 mediagen config add my-proxy --api-type qwen \
-  --base-url https://<workspace-id>.cn-beijing.maas.aliyuncs.com \
+  --base-url https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1 \
   --model qwen-image-3.0 --api-key-env DASHSCOPE_API_KEY
 
 mediagen login --provider my-proxy --api-key sk-...
@@ -74,37 +74,41 @@ stdout 上每行打印一个绝对路径；`--json` 打印一个对象：
 `~/.config/mediagen-cli` 三者中第一个存在的。
 
 ```toml
-default_provider = "dashscope"
+default_provider = "volcengine"
 # output_dir = "./media-output"
-
-[providers.dashscope]
-api_type = "qwen"
-base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"   # qwen 的 images 接口在 workspace 域名下
-model = "qwen-image-3.0"
-api_key_env = "DASHSCOPE_API_KEY"
 
 [providers.volcengine]
 api_type = "ark"
-base_url = "https://ark.cn-beijing.volces.com"
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
 model = "doubao-seedream-5-0-flash-260915"
 api_key_env = "ARK_API_KEY"
 
+[providers.dashscope]
+api_type = "qwen"
+base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+model = "qwen-image-3.0"
+api_key_env = "DASHSCOPE_API_KEY"
+
 [providers.my-proxy]              # 同一方言的第二条入口
 api_type = "qwen"
-base_url = "https://proxy.example.com"
+base_url = "https://proxy.example.com/my-gateway/v1"   # 网关前缀 + 版本段
 model = "qwen-image-3.0"
-# path = "/v1/images/generations"  # 可选：覆盖方言默认路径
+api_key_env = "MY_PROXY_KEY"
 ```
 
 一个 provider = 一种 API 方言（`api_type`，取 `qwen` 或 `ark`）+ 一个具体入口
-（`base_url` + `model`）。`api_type`、`base_url`、`model` 三项必填，`path` 和
-`api_key_env` 可选（`path` 缺省时按方言取）。文件是唯一真相：内置没有任何 provider，
-首次运行只是把上面这份内容写进 `config.toml` 供你修改。
+（`base_url` + `model`）。`api_type`、`base_url`、`model` 三项必填，`api_key_env` 可选。
+**`base_url` 写到版本段为止** —— 端点文件名（`/images/generations`）由方言补上，
+所以把版本段再手写一遍就会变成 `https://host/v1/compatible-mode/v1/...` 这种双重前缀。
+文件是唯一真相：内置没有任何 provider，首次运行只是把上面这份内容写进 `config.toml`
+供你修改。种子里 qwen 那条带 `<workspace-id>` 占位符，所有命令都会在花钱之前拒绝它，
+所以你只需要改这一行。
 
 key 跟着 provider 实例走，依次来自 `--api-key`、该实例声明的 `api_key_env`、
 `auth.json`。没有任何方言级的默认 key 变量，所以同一方言的两条入口可以各用各的 key。
-key 永远只以打码形式输出。`base_url` 只能写在文件里 —— 对 qwen 来说不改它直接就是
-`404`，错误信息会指路。Node >= 24 上设 `NODE_USE_ENV_PROXY=1` 可走 `HTTP_PROXY`。
+key 永远只以打码形式输出。`base_url` 写在文件里（`image generate` 有一次性的 `--base-url` 覆盖），并且会在发请求前校验：对 qwen
+来说公共域名直接就是 `404`，所以种子保留一个会明确失败的占位符。`mediagen config show`
+会打印每条 provider 实际会请求的 endpoint。Node >= 24 上设 `NODE_USE_ENV_PROXY=1` 可走 `HTTP_PROXY`。
 超时：每次请求 300 秒，每次下载 120 秒。
 
 在 Agent 里用？`skills/mediagen/SKILL.md` 说明什么时候该用这个 CLI。
@@ -128,7 +132,8 @@ npm run dev -- image generate --help
 值得守住的东西：所有检查都在第一次 `fetch` 之前完成；付费请求从不重试；stdout 只
 放结果；任何输出路径都不含未打码的 key。说现有方言的新 provider 不需要写代码 ——
 一张 `config.toml` 表就够。新方言则是 `src/api/` 下的适配器、`DIALECTS`
-（`src/api/index.ts`）里的一行，以及 `src/providers.ts` 里的默认路径。
+（`src/api/index.ts`）里的一行，以及适配器上的 `path` 字段 —— 方言拼在 `base_url`
+后面的那个端点文件名。
 
 发布：`npm pack --dry-run` 检查 tarball（发布 `dist/` 和 `skills/`），然后
 `npm version patch && npm publish`。设计文档在 `docs/superpowers/specs/`。

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { UsageError } from "./errors.js";
-import { isUrl, nowStamp, slugModel, toImageInput } from "./util.js";
+import { isUrl, normalizeHttpBaseUrl, nowStamp, slugModel, toImageInput } from "./util.js";
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02]);
 
@@ -39,6 +39,40 @@ describe("isUrl", () => {
     expect(isUrl("/tmp/x.png")).toBe(false);
     expect(isUrl("data:image/png;base64,AA")).toBe(false);
     expect(isUrl("ftp://x/y.png")).toBe(false);
+  });
+});
+
+describe("normalizeHttpBaseUrl", () => {
+  it("keeps an absolute http(s) base URL and strips trailing slashes", () => {
+    expect(normalizeHttpBaseUrl("https://proxy.example.com/api/v3")).toBe(
+      "https://proxy.example.com/api/v3",
+    );
+    expect(normalizeHttpBaseUrl("https://proxy.example.com/api/v3//")).toBe(
+      "https://proxy.example.com/api/v3",
+    );
+    expect(normalizeHttpBaseUrl("  http://h/v1  ")).toBe("http://h/v1");
+  });
+
+  it("rejects anything that would swallow the appended endpoint", () => {
+    // A dangling delimiter keeps `search`/`hash` empty for URL, yet the literal
+    // concatenation would still swallow the endpoint: the value must be refused.
+    expect(normalizeHttpBaseUrl("https://h/v1?")).toBeUndefined();
+    expect(normalizeHttpBaseUrl("https://h/v1#")).toBeUndefined();
+    expect(normalizeHttpBaseUrl("https://h/v1?x=1")).toBeUndefined();
+    expect(normalizeHttpBaseUrl("https://h/v1#frag")).toBeUndefined();
+    expect(normalizeHttpBaseUrl("https://h/v1?x=1#frag")).toBeUndefined();
+  });
+
+  it("rejects credentials, other schemes and non-URLs", () => {
+    // Echoed back by `config show` and pasted into error messages: a password
+    // has no business surviving in a base URL.
+    expect(normalizeHttpBaseUrl("https://user:pass@h/v1")).toBeUndefined();
+    expect(normalizeHttpBaseUrl("https://user@h/v1")).toBeUndefined();
+    expect(normalizeHttpBaseUrl("ftp://h/v1")).toBeUndefined();
+    expect(normalizeHttpBaseUrl("data:text/plain,x")).toBeUndefined();
+    expect(normalizeHttpBaseUrl("not-a-url")).toBeUndefined();
+    expect(normalizeHttpBaseUrl("https://<workspace-id>.example.com/v1")).toBeUndefined();
+    expect(normalizeHttpBaseUrl("")).toBeUndefined();
   });
 });
 

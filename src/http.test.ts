@@ -4,8 +4,7 @@ import { callImageApi, parseJsonOrThrow } from "./http.js";
 import type { ImageRequest, ProviderConfig } from "./types.js";
 
 const API_KEY = "sk-test-secret-key-0123456789";
-const QWEN_PATH = "/api/v1/services/aigc/multimodal-generation/generation";
-const QWEN_URL = `https://dashscope.example.com${QWEN_PATH}`;
+const QWEN_URL = "https://dashscope.example.com/images/generations";
 const REQUEST_ID = "req-0001";
 const REQUEST_TIMEOUT_MS = 300_000;
 
@@ -20,7 +19,6 @@ function provider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     api_type: "qwen",
     base_url: "https://dashscope.example.com",
     model: "qwen-image-3.0",
-    path: QWEN_PATH,
     ...overrides,
   };
 }
@@ -97,6 +95,22 @@ describe("callImageApi", () => {
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     expect(parsed.images).toEqual([{ url: "https://cdn.example.com/cat.png" }]);
     expect(parsed.failures).toEqual([]);
+  });
+
+  it("appends the dialect endpoint to base_url", async () => {
+    const fetchMock = stubFetch(() =>
+      jsonResponse({ data: [{ url: "https://cdn.example.com/1.png" }] }),
+    );
+
+    await callImageApi({
+      provider: provider({ api_type: "ark", base_url: "https://proxy.example.com/api/v3" }),
+      apiKey: API_KEY,
+      request: imageRequest(),
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://proxy.example.com/api/v3/images/generations",
+    );
   });
 
   it("surfaces the x-request-id header into ParsedResponse.requestId", async () => {
@@ -396,9 +410,8 @@ describe("callImageApi: a 404 with an empty body", () => {
     return provider({
       name: "ark",
       api_type: "ark",
-      base_url: "https://ark.cn-beijing.volces.com",
+      base_url: "https://ark.cn-beijing.volces.com/api/v3",
       model: "doubao-seedream-5-0-flash-260915",
-      path: "/api/v3/images/generations",
     });
   }
 
@@ -420,6 +433,10 @@ describe("callImageApi: a 404 with an empty body", () => {
     // The remedy lives in config.toml; there is no login flag for a host any more.
     expect(error.message).not.toContain("mediagen login");
     expect(error.message).toContain("config.toml");
+    expect(error.message).toContain(
+      'base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"',
+    );
+    expect(error.message).toContain("version segment");
     expect(error.message).not.toContain(API_KEY);
   });
 

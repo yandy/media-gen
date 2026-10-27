@@ -111,6 +111,7 @@ export function parseQwenResponse(json: unknown, requestId?: string): ParsedResp
 }
 
 export const QwenDialect: DialectAdapter = {
+  path: "/images/generations",
   buildRequest: buildQwenRequest,
   parseResponse: parseQwenResponse,
 };

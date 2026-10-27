@@ -32,13 +32,17 @@ then validates before it runs.
 mediagen config show        # prints what resolves; any command creates config.toml on first use
 ```
 
-qwen needs its workspace-scoped host, and the public host 404s, so edit
-`[providers.dashscope].base_url` in `config.toml` to
-`https://<workspace-id>.cn-beijing.maas.aliyuncs.com` (ark needs no host edit).
-To add another entry without hand-editing:
+`base_url` ends at the version segment: the dialect appends the endpoint file name
+(`/images/generations`) itself. qwen needs its workspace-scoped host, and the public
+host 404s, so the seeded `[providers.dashscope].base_url` is a placeholder you must
+finish: replace `<workspace-id>` with your workspace id, keeping the pattern, e.g.
+`https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` (ark's seed is
+usable as written). Until then `image generate` and `image edit` exit 1 without
+sending anything; `config show`, `config path` and `auth status` still work, and
+`login` exits 2 with the same message. To add another entry without hand-editing:
 
 ```bash
-mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com \
+mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com/v1 \
   --model qwen-image-3.0 --api-key-env MY_PROXY_KEY
 ```
 

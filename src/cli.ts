@@ -28,8 +28,9 @@ import {
 import { ConfigError, UsageError } from "./errors.js";
 import { runGenerate, type GenerateOptions } from "./generate.js";
 import { renderError, renderHuman, renderJson, type RenderedOutput } from "./output.js";
-import { DIALECT_DEFAULT_PATHS } from "./providers.js";
 import { shellArg, tomlBasicString, tomlKey } from "./toml.js";
+import { dialectPath } from "./api/index.js";
+import { normalizeHttpBaseUrl } from "./util.js";
 
 /**
  * Everything the CLI needs from the outside world that tests must be able to
@@ -67,8 +68,9 @@ interface ProviderView {
   api_type?: ConfiguredValue;
   base_url?: ConfiguredValue;
   model?: ConfiguredValue;
-  path?: ConfiguredValue;
   api_key_env?: ConfiguredValue;
+  /** base_url + the dialect endpoint: the URL a request would actually hit. */
+  endpoint?: string;
   api_key: KeyStatus;
   missing?: string[];
 }
@@ -83,7 +85,6 @@ interface ConfigAddFlags {
   apiType?: string;
   baseUrl?: string;
   model?: string;
-  path?: string;
   apiKeyEnv?: string;
   json?: boolean;
 }
@@ -120,7 +121,7 @@ Built for AI agents: explicit flags, no interactive prompts, machine-readable ou
 
 Quickstart:
   mediagen config show                                    # any command creates config.toml on first use
-  mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com --model qwen-image-3.0
+  mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com/v1 --model qwen-image-3.0
   mediagen login --provider my-proxy --api-key sk-...      # store a key in auth.json
   mediagen image generate "a red fox in fresh snow" --provider my-proxy --out-dir ./out
   mediagen image edit "make the sky sunset orange" --image ./photo.jpg
@@ -175,7 +176,7 @@ function imageHelpText(command: "generate" | "edit"): string {
   mediagen image generate "product photo on a white background" --provider my-proxy --out-dir ./shots
 
   # a one-off test against a proxy, without touching config.toml
-  mediagen image generate "colour test card" --provider dashscope --base-url https://proxy.example.com --api-key sk-...`;
+  mediagen image generate "colour test card" --provider dashscope --base-url https://proxy.example.com/v1 --api-key sk-...`;
 
   return `
 ${intro}
@@ -234,7 +235,7 @@ const IMAGE_OPTION_HELP = {
   outDir: "where to write files (default: config output_dir, else cwd)",
   json: "print one JSON object instead of file paths",
   apiKey: "one-off API key; overrides env and auth.json",
-  baseUrl: "one-off API base URL, e.g. a proxy",
+  baseUrl: "one-off API base URL, up to the version segment, e.g. a proxy",
 } as const;
 
 /** Adds the flags shared by `image generate` and `image edit`. */
@@ -333,9 +334,8 @@ export function createProgram(options: ProgramOptions = {}): Command {
     .command("add <name>")
     .description("Create a [providers.<name>] table in config.toml")
     .option("--api-type <dialect>", "protocol dialect: qwen or ark")
-    .option("--base-url <url>", "the provider's API base URL")
+    .option("--base-url <url>", "the provider's API base URL, up to the version segment")
     .option("--model <id>", "the model id this provider defaults to")
-    .option("--path <path>", "override the dialect's default images path")
     .option("--api-key-env <VAR>", "environment variable holding this provider's key")
     .option("--json", "print a JSON result")
     .action(async (name: string, flags: ConfigAddFlags) => {
@@ -733,13 +733,8 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
 
   const model = (flags.model ?? "").trim();
   if (model === "") throw new UsageError("--model is required");
-  // A blank optional field would be written out as an empty string, and an empty
-  // `path` in particular survives `path ?? default` and sends the request to the
-  // bare host, so the field is either sane or absent.
-  const pathOverride = flags.path?.trim();
-  if (flags.path !== undefined && pathOverride === "") {
-    throw new UsageError("--path must not be empty");
-  }
+  // A blank optional field would be written out as an empty string, so it is
+  // either sane or absent.
   const apiKeyEnv = flags.apiKeyEnv?.trim();
   if (flags.apiKeyEnv !== undefined && apiKeyEnv === "") {
     throw new UsageError("--api-key-env must not be empty");
@@ -762,7 +757,6 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
     base_url: normalizeBaseUrl(flags.baseUrl),
     model,
   };
-  if (pathOverride !== undefined) fields.path = pathOverride;
   if (apiKeyEnv !== undefined) fields.api_key_env = apiKeyEnv;
 
   const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
@@ -839,10 +833,11 @@ function runConfigShow(flags: { json?: boolean }): void {
 
   for (const { name, apiKeyEnv, view } of views) {
     lines.push(`  ${view.name} (dialect ${view.api_type?.value ?? "unknown"})`);
-    for (const field of ["api_type", "base_url", "model", "path", "api_key_env"] as const) {
+    for (const field of ["api_type", "base_url", "model", "api_key_env"] as const) {
       const value = view[field];
       if (value !== undefined) lines.push(`    ${field}: ${show(value)}`);
     }
+    if (view.endpoint !== undefined) lines.push(`    endpoint: ${view.endpoint} (computed)`);
     if (view.missing !== undefined && view.missing.length > 0) {
       lines.push(`    missing: ${view.missing.join(", ")} (required in ${file})`);
     }
@@ -867,7 +862,7 @@ function configuredValue(value: string, declared: unknown): ConfiguredValue {
 
 function buildProviderView(name: string, entry: ProviderOverride): ProviderView {
   const field = (
-    key: "api_type" | "base_url" | "model" | "path" | "api_key_env",
+    key: "api_type" | "base_url" | "model" | "api_key_env",
   ): ConfiguredValue | undefined => {
     const value = entry[key];
     return value === undefined ? undefined : { value, source: "config.toml" };
@@ -875,25 +870,18 @@ function buildProviderView(name: string, entry: ProviderOverride): ProviderView 
 
   const missing: string[] = [];
   const fields: Partial<
-    Record<"api_type" | "base_url" | "model" | "path" | "api_key_env", ConfiguredValue>
+    Record<"api_type" | "base_url" | "model" | "api_key_env", ConfiguredValue>
   > = {};
 
-  for (const key of ["api_type", "base_url", "model", "path", "api_key_env"] as const) {
+  for (const key of ["api_type", "base_url", "model", "api_key_env"] as const) {
     const value = field(key);
     if (value === undefined) {
-      // api_key_env and path are optional everywhere; the rest are required, and
-      // missing them is exactly what resolveProvider() will complain about.
-      if (key !== "api_key_env" && key !== "path") missing.push(key);
+      // api_key_env is optional everywhere; the rest are required, and missing
+      // them is exactly what resolveProvider() will complain about.
+      if (key !== "api_key_env") missing.push(key);
       continue;
     }
     fields[key] = value;
-  }
-
-  // resolveProvider() fills a missing path with the dialect default, so
-  // config show reports the path a request will actually use.
-  const apiType = fields.api_type?.value;
-  if (fields.path === undefined && (apiType === "qwen" || apiType === "ark")) {
-    fields.path = { value: DIALECT_DEFAULT_PATHS[apiType], source: "default" };
   }
 
   const view: ProviderView = {
@@ -901,6 +889,13 @@ function buildProviderView(name: string, entry: ProviderOverride): ProviderView 
     ...fields,
     api_key: keyStatus(name, entry.api_key_env),
   };
+
+  // The dialect owns the endpoint, so this is the URL a request would hit. A
+  // base_url that cannot be parsed gets no endpoint line rather than a throw:
+  // config show has to survive a half-written file.
+  const endpointPath = fields.api_type === undefined ? undefined : dialectPath(fields.api_type.value);
+  const base = fields.base_url === undefined ? undefined : normalizeHttpBaseUrl(fields.base_url.value);
+  if (endpointPath !== undefined && base !== undefined) view.endpoint = `${base}${endpointPath}`;
   if (missing.length > 0) view.missing = missing;
   return view;
 }
@@ -912,24 +907,15 @@ function keyStatus(name: string, apiKeyEnv: string | undefined): KeyStatus {
 }
 
 function normalizeBaseUrl(value: string): string {
-  // new URL() tolerates surrounding whitespace, so trim first: whatever passes
-  // validation is exactly what gets persisted and concatenated with the path.
-  const trimmed = value.trim();
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
+  // normalizeHttpBaseUrl() trims, so whatever passes validation is exactly what
+  // gets persisted and concatenated with the dialect endpoint.
+  const normalized = normalizeHttpBaseUrl(value);
+  if (normalized === undefined) {
     throw new UsageError(
-      `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) URL`,
+      `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) URL without credentials, query or fragment`,
     );
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new UsageError(
-      `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) URL`,
-    );
-  }
-  // Trailing slashes would double up with the provider path.
-  return trimmed.replace(/\/+$/, "");
+  return normalized;
 }
 
 /** Appends a complete `[providers.<name>]` table; the caller checked it is absent. */

@@ -17,9 +17,11 @@ const BODY_EXCERPT_LIMIT = 200;
  * The OpenAI-compatible images path is not served on the legacy DashScope host,
  * which answers 404 with an empty body; Bailian serves it only on the caller's
  * workspace-scoped host. The dialect stays OpenAI-compatible, so the fix is a
- * `base_url` and the error has to say so.
+ * `base_url` and the error has to say so — including the version segment, since
+ * the dialect appends only the endpoint file name.
  */
-const QWEN_WORKSPACE_BASE_URL = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com";
+const QWEN_WORKSPACE_BASE_URL =
+  "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1";
 
 export interface CallImageApiParams {
   provider: ProviderConfig;
@@ -145,7 +147,7 @@ function missingQwenEndpointMessage(
   return [
     `${provider.name} API request failed with status ${status}: this endpoint does not exist on ${host}.`,
     `The OpenAI-compatible images API is served only on your workspace-scoped Bailian host, ${QWEN_WORKSPACE_BASE_URL}.`,
-    `Fix it by setting base_url = "${QWEN_WORKSPACE_BASE_URL}" under [providers.${tomlKey(provider.name)}] in config.toml, then run the command again.`,
+    `Fix it by setting base_url = "${QWEN_WORKSPACE_BASE_URL}" under [providers.${tomlKey(provider.name)}] in config.toml — base_url runs up to the version segment, and the dialect appends the endpoint path — then run the command again.`,
   ].join("\n");
 }
 
@@ -220,7 +222,7 @@ export async function callImageApi(params: CallImageApiParams): Promise<ParsedRe
   const payload = JSON.stringify(body);
   const redact = redactorFor(apiKey);
 
-  const url = `${provider.base_url}${provider.path}`;
+  const url = `${provider.base_url}${dialect.path}`;
   const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
   let response: Response;

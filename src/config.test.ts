@@ -187,14 +187,27 @@ describe("prepareConfigFile", () => {
 
     expect(fs.existsSync(configPath())).toBe(true);
     const config = loadConfig();
-    expect(config.default_provider).toBe("dashscope");
+    expect(config.default_provider).toBe("volcengine");
     expect(Object.keys(config.providers).sort()).toEqual(["dashscope", "volcengine"]);
-    expect(config.providers.dashscope).toEqual({
-      api_type: "qwen",
-      base_url: "https://dashscope.aliyuncs.com",
-      model: "qwen-image-3.0",
-      api_key_env: "DASHSCOPE_API_KEY",
+    expect(config.providers.volcengine).toEqual({
+      api_type: "ark",
+      base_url: "https://ark.cn-beijing.volces.com/api/v3",
+      model: "doubao-seedream-5-0-flash-260915",
+      api_key_env: "ARK_API_KEY",
     });
+  });
+
+  it("seeds a layout where only qwen needs an edit", () => {
+    ensureConfigFile();
+    const text = fs.readFileSync(configPath(), "utf8");
+
+    expect(text).toContain('default_provider = "volcengine"');
+    expect(text).toContain('base_url = "https://ark.cn-beijing.volces.com/api/v3"');
+    expect(text).toContain(
+      'base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"',
+    );
+    expect(text).not.toMatch(/^path\s*=/m);
+    expect(text).not.toMatch(/^output_dir\s*=/m);
   });
 
   it("validates an existing file and leaves its bytes alone", () => {
@@ -267,17 +280,16 @@ describe("ensureConfigFile", () => {
 });
 
 describe("resolveProvider", () => {
-  it("resolves a provider declared in config.toml and fills the dialect path", () => {
+  it("resolves a provider declared in config.toml without inventing a path", () => {
     writeConfig(
-      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\nmodel = "some-model"\n',
+      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "some-model"\n',
     );
 
     expect(resolveProvider("my-proxy", loadConfig())).toEqual({
       name: "my-proxy",
       api_type: "ark",
-      base_url: "https://proxy.example.com",
+      base_url: "https://proxy.example.com/api/v3",
       model: "some-model",
-      path: "/api/v3/images/generations",
     });
   });
 
@@ -300,12 +312,12 @@ describe("resolveProvider", () => {
     expect(error.message).toContain("default_provider");
   });
 
-  it("lets config override the path of a provider", () => {
+  it("ignores a leftover path key, which no longer means anything", () => {
     writeConfig(
-      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\nmodel = "some-model"\npath = "/custom/images"\n',
+      '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3"\nmodel = "m"\npath = "/custom/images"\n',
     );
 
-    expect(resolveProvider("my-proxy", loadConfig()).path).toBe("/custom/images");
+    expect(resolveProvider("my-proxy", loadConfig())).not.toHaveProperty("path");
   });
 
   it("throws ConfigError naming api_type when a provider omits it", () => {
@@ -328,6 +340,58 @@ describe("resolveProvider", () => {
     expect(error.message).toContain("api_type");
     expect(error.message).toContain("base_url");
     expect(error.message).toContain("model");
+  });
+
+  it("names the seeded placeholder instead of repeating it as an example", () => {
+    writeConfig(
+      '[providers.qwen]\napi_type = "qwen"\nbase_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"\nmodel = "m"\n',
+    );
+
+    const error = thrownBy(() => resolveProvider("qwen", loadConfig()));
+
+    expect(error).toBeInstanceOf(ConfigError);
+    expect(error.message).toContain("base_url");
+    expect(error.message).toContain("placeholder");
+    expect(error.message).toContain("config.toml");
+    // The user's own value is the thing to change: no "expected X, like X".
+    expect(error.message).toContain("https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1");
+    expect(error.message).not.toContain("like https://<workspace-id>");
+  });
+
+  it("rejects a base_url that is not an absolute http(s) URL", () => {
+    writeConfig('[providers.ark]\napi_type = "ark"\nbase_url = "not-a-url"\nmodel = "m"\n');
+
+    const error = thrownBy(() => resolveProvider("ark", loadConfig()));
+
+    expect(error).toBeInstanceOf(ConfigError);
+    expect(error.message).toContain("base_url");
+    expect(error.message).toContain("https://ark.cn-beijing.volces.com/api/v3");
+    expect(error.message).toContain("config.toml");
+  });
+
+  it("strips trailing slashes from base_url", () => {
+    writeConfig(
+      '[providers.p]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3/"\nmodel = "m"\n',
+    );
+
+    expect(resolveProvider("p", loadConfig()).base_url).toBe("https://proxy.example.com/api/v3");
+  });
+
+  it("rejects a base_url carrying a query string or fragment", () => {
+    writeConfig(
+      '[providers.p]\napi_type = "ark"\nbase_url = "https://proxy.example.com/api/v3?x=1"\nmodel = "m"\n',
+    );
+
+    expect(thrownBy(() => resolveProvider("p", loadConfig()))).toBeInstanceOf(ConfigError);
+  });
+
+  it("rejects an empty base_url", () => {
+    writeConfig('[providers.p]\napi_type = "ark"\nbase_url = ""\nmodel = "m"\n');
+
+    const error = thrownBy(() => resolveProvider("p", loadConfig()));
+
+    expect(error).toBeInstanceOf(ConfigError);
+    expect(error.message).toContain("base_url");
   });
 
   it("throws ConfigError pointing at config.toml for an unknown provider", () => {

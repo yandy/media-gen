@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { parse, type TomlTable } from "smol-toml";
 import { ConfigError, malformedDocumentMessage, unreadableFileMessage, unwritableFileMessage } from "./errors.js";
-import { DIALECT_DEFAULT_PATHS, SEED_CONFIG } from "./providers.js";
+import { SEED_CONFIG } from "./providers.js";
 import { shellArg, tomlKey } from "./toml.js";
+import { normalizeHttpBaseUrl } from "./util.js";
 import type { Dialect, ProviderConfig } from "./types.js";
 
 /** One entry from `[providers.<name>]` in config.toml, before validation. */
@@ -13,7 +14,6 @@ export interface ProviderOverride {
   api_type?: Dialect;
   base_url?: string;
   model?: string;
-  path?: string;
   api_key_env?: string;
 }
 
@@ -24,7 +24,7 @@ export interface MediagenConfig {
   providers: Record<string, ProviderOverride>;
 }
 
-const PROVIDER_STRING_FIELDS = ["base_url", "model", "path", "api_key_env"] as const;
+const PROVIDER_STRING_FIELDS = ["base_url", "model", "api_key_env"] as const;
 
 export function configDir(): string {
   const override = process.env.MEDIAGEN_CLI_CONFIG_DIR;
@@ -181,28 +181,61 @@ export function resolveProvider(name: string, config: MediagenConfig): ProviderC
   }
 
   const apiType = entry.api_type;
-  const baseUrl = entry.base_url;
+  const declaredBaseUrl = entry.base_url;
   const model = entry.model;
 
   const missing: string[] = [];
   if (apiType === undefined) missing.push("api_type");
-  if (baseUrl === undefined) missing.push("base_url");
+  if (declaredBaseUrl === undefined) missing.push("base_url");
   if (model === undefined) missing.push("model");
-  if (apiType === undefined || baseUrl === undefined || model === undefined) {
+  if (apiType === undefined || declaredBaseUrl === undefined || model === undefined) {
     throw new ConfigError(
       `provider "${name}" in ${file} is missing required field(s): ${missing.join(", ")}`,
     );
   }
+
+  const baseUrl = resolveBaseUrl(name, apiType, file, declaredBaseUrl);
 
   const provider: ProviderConfig = {
     name,
     api_type: apiType,
     base_url: baseUrl,
     model,
-    path: entry.path ?? DIALECT_DEFAULT_PATHS[apiType],
   };
   if (entry.api_key_env !== undefined) provider.api_key_env = entry.api_key_env;
   return provider;
+}
+
+/**
+ * config.toml has no flag parser in front of it, so base_url is validated here,
+ * before anything is spent. The qwen example is the workspace-scoped host: the
+ * public host answers the images endpoint with a 404.
+ */
+function resolveBaseUrl(name: string, apiType: Dialect, file: string, value: string): string {
+  const normalized = normalizeHttpBaseUrl(value);
+  if (normalized !== undefined) return normalized;
+
+  const table = `[providers.${tomlKey(name)}] in ${file}`;
+  // The seed ships this placeholder, so it is the likeliest bad value in the
+  // file and deserves its own sentence: "expected X, like X" would only repeat
+  // the user's own text back at them without naming what to do.
+  if (value.includes("<")) {
+    throw new ConfigError(
+      `base_url under ${table} still contains the placeholder ${JSON.stringify(value)}: ` +
+        `replace <workspace-id> with your Bailian workspace id, e.g. ` +
+        `"https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"`,
+    );
+  }
+
+  const example =
+    apiType === "qwen"
+      ? "https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+      : "https://ark.cn-beijing.volces.com/api/v3";
+  throw new ConfigError(
+    `provider "${name}" has invalid base_url ${JSON.stringify(value)} under ${table}: ` +
+      `expected an absolute http(s) URL ending at the version segment, ` +
+      `without credentials, query or fragment, e.g. ${example}`,
+  );
 }
 
 function readProviderOverride(
