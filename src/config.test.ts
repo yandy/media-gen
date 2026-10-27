@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   configDir,
   configPath,
+  ensureConfigFile,
   loadConfig,
   resolveProvider,
   type MediagenConfig,
@@ -184,15 +185,26 @@ describe("loadConfig", () => {
 });
 
 describe("ensureConfigFile", () => {
-  it("still returns a usable config when the seed cannot be written", () => {
+  it("throws a ConfigError naming the path and the remedy when the seed cannot be written", () => {
     const blocker = path.join(tempDir, "blocker");
     fs.writeFileSync(blocker, "");
-    process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(blocker, "config");
+    const blockedDir = path.join(blocker, "config");
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = blockedDir;
 
-    const config = loadConfig();
+    const error = thrownBy(() => ensureConfigFile());
 
-    expect(config.providers).toEqual({});
-    expect(fs.existsSync(configPath())).toBe(false);
+    expect(error).toBeInstanceOf(ConfigError);
+    expect(error.message).toContain(path.join(blockedDir, "config.toml"));
+    expect(error.message).toMatch(/ENOTDIR|EACCES|EROFS|ENOSPC/);
+    expect(error.message).toContain("MEDIAGEN_CLI_CONFIG_DIR");
+  });
+
+  it("does nothing when config.toml already exists", () => {
+    writeConfig('default_provider = "mine"\n');
+
+    ensureConfigFile();
+
+    expect(fs.readFileSync(configPath(), "utf8")).toBe('default_provider = "mine"\n');
   });
 });
 

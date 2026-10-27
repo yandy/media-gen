@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parse, type TomlTable } from "smol-toml";
-import { ConfigError, malformedDocumentMessage, unreadableFileMessage } from "./errors.js";
+import { ConfigError, malformedDocumentMessage, unreadableFileMessage, unwritableFileMessage } from "./errors.js";
 import { DIALECT_DEFAULT_PATHS, SEED_CONFIG } from "./providers.js";
 import { shellArg, tomlKey } from "./toml.js";
 import type { Dialect, ProviderConfig } from "./types.js";
@@ -76,9 +76,10 @@ export function writeConfigFile(text: string): string {
  * run leaves the user something with comments to edit rather than a command
  * that fails on an empty store.
  *
- * Best effort: a read-only or otherwise unwritable config dir must not stop the
- * read-only commands (`config show`, `auth status`, `config path`). When the
- * write fails the caller simply sees an empty provider table.
+ * Called from the bootstrap stage in `main()`, which runs before any command is
+ * dispatched. A config dir that cannot be written is a hard failure: the user
+ * gets a `ConfigError` naming the path and the way out, rather than every later
+ * command failing for a reason that looks like "no providers configured".
  */
 export function ensureConfigFile(): void {
   const file = configPath();
@@ -89,9 +90,11 @@ export function ensureConfigFile(): void {
     // "wx" fails instead of truncating, so a concurrent run that is already
     // writing a config is never clobbered by the seed.
     fs.writeFileSync(file, SEED_CONFIG, { flag: "wx" });
-  } catch {
-    // Best effort: losing the seed is recoverable by editing the path by hand,
-    // while throwing here would make every command unusable.
+  } catch (error) {
+    // A concurrent run may have won the race between existsSync and "wx";
+    // that is success, not a failure to report.
+    if (fs.existsSync(file)) return;
+    throw new ConfigError(unwritableFileMessage(file, error));
   }
 }
 

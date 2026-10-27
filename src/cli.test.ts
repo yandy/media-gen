@@ -563,16 +563,33 @@ describe("mediagen config add: protecting the file", () => {
   });
 });
 
-describe("mediagen config show: unreadable config dir", () => {
-  it("still prints the empty-provider hint instead of failing", async () => {
+describe("mediagen config: unwritable config dir", () => {
+  it("fails with the path and the remedy instead of pretending there is no config", async () => {
     const blocker = path.join(tempDir, "blocker");
     fs.writeFileSync(blocker, "");
-    process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(blocker, "config");
+    const blockedDir = path.join(blocker, "config");
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = blockedDir;
 
     const result = await run(["config", "show"]);
 
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain("none; run");
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(path.join(blockedDir, "config.toml"));
+    expect(result.stderr).toContain("MEDIAGEN_CLI_CONFIG_DIR");
+    expect(result.stderr).not.toContain("none; run");
+  });
+
+  it("keeps the --json error machine-readable", async () => {
+    const blocker = path.join(tempDir, "blocker");
+    fs.writeFileSync(blocker, "");
+    const blockedDir = path.join(blocker, "config");
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = blockedDir;
+
+    const result = await run(["config", "show", "--json"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as { error: { message: string } };
+    expect(parsed.error.message).toContain(path.join(blockedDir, "config.toml"));
   });
 });
 
@@ -634,7 +651,8 @@ describe("remedy messages", () => {
   it("wraps an unwritable config dir instead of leaking the raw fs error", async () => {
     const blocker = path.join(tempDir, "blocker");
     fs.writeFileSync(blocker, "");
-    process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(blocker, "config");
+    const blockedDir = path.join(blocker, "config");
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = blockedDir;
 
     const result = await run([
       "config", "add", "p1",
@@ -642,9 +660,12 @@ describe("remedy messages", () => {
     ]);
 
     expect(result.code).toBe(1);
-    // Wrapped in a ConfigError naming the file, not a bare fs error on its own.
-    expect(result.stderr).toContain("cannot write");
-    expect(result.stderr).toContain(configPath());
+    // Wrapped in a ConfigError naming the file and the errno code, not a raw
+    // "open '/…' " dump with syscall details.
+    expect(result.stderr).toContain("cannot create");
+    expect(result.stderr).toContain(path.join(blockedDir, "config.toml"));
+    expect(result.stderr).toMatch(/ENOTDIR|EACCES|EROFS/);
+    expect(result.stderr).not.toContain("syscall");
   });
 });
 
