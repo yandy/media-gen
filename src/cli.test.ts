@@ -468,6 +468,151 @@ describe("mediagen config add", () => {
   });
 });
 
+describe("mediagen config add: value hygiene", () => {
+  const add = (
+    args: string[],
+  ): Promise<{ code: number; stdout: string; stderr: string }> => run(["config", "add", ...args]);
+
+  it("strips a trailing slash from --base-url", async () => {
+    const result = await add([
+      "p1", "--api-type", "qwen", "--base-url", "https://k.example.com/", "--model", "m",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(readConfig()).toContain('base_url = "https://k.example.com"');
+  });
+
+  it("trims a padded --base-url instead of persisting the spaces", async () => {
+    const result = await add([
+      "p1", "--api-type", "qwen", "--base-url", "  https://k.example.com  ", "--model", "m",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(readConfig()).toContain('base_url = "https://k.example.com"');
+  });
+
+  it.each(["--path", "--api-key-env"])("rejects a blank %s", async (flag) => {
+    const result = await add([
+      "p1", "--api-type", "qwen", "--base-url", "https://k.example.com", "--model", "m",
+      flag, "   ",
+    ]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain(flag);
+    // A rejected command leaves the filesystem alone, so config.toml is never created.
+    expect(fs.existsSync(configPath())).toBe(false);
+  });
+
+  it("rejects a blank provider name", async () => {
+    const result = await add([
+      "", "--api-type", "qwen", "--base-url", "https://k.example.com", "--model", "m",
+    ]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("name");
+    expect(fs.existsSync(configPath())).toBe(false);
+  });
+
+  it("leaves no temporary file behind", async () => {
+    await add(["p1", "--api-type", "qwen", "--base-url", "https://k.example.com", "--model", "m"]);
+
+    expect(fs.readdirSync(configHome)).toEqual(["config.toml"]);
+  });
+});
+
+describe("mediagen config add: protecting the file", () => {
+  it("refuses a config.toml it cannot append to faithfully, and changes nothing", async () => {
+    // An inline `providers` table cannot later be extended by a [providers.<name>]
+    // header: TOML forbids redefining it. The rewrite must refuse, not mangle.
+    writeConfig('providers = { old = { api_type = "ark", base_url = "https://o.example.com", model = "m" } }\n');
+    const before = readConfig();
+
+    const result = await run([
+      "config", "add", "brandnew",
+      "--api-type", "qwen", "--base-url", "https://k.example.com", "--model", "m",
+    ]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("by hand");
+    expect(readConfig()).toBe(before);
+  });
+
+  it("preserves every existing byte, datetimes included", async () => {
+    const original = [
+      "# keep me",
+      'default_provider = "dashscope"',
+      "since = 1979-05-27T07:32:00Z",
+      "offset = 1979-05-27T07:32:00-07:00",
+      "",
+      "[providers.dashscope]",
+      'api_type = "qwen"',
+      'base_url = "https://x"',
+      'model = "m"',
+      "",
+    ].join("\n");
+    writeConfig(original);
+
+    const result = await run([
+      "config", "add", "p2",
+      "--api-type", "ark", "--base-url", "https://p2.example.com", "--model", "m2",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(readConfig().startsWith(original)).toBe(true);
+    expect(readConfig()).toContain("[providers.p2]");
+  });
+});
+
+describe("mediagen config show: unreadable config dir", () => {
+  it("still prints the empty-provider hint instead of failing", async () => {
+    const blocker = path.join(tempDir, "blocker");
+    fs.writeFileSync(blocker, "");
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(blocker, "config");
+
+    const result = await run(["config", "show"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("none; run");
+  });
+});
+
+describe("mediagen with no default provider", () => {
+  it("tells login to set default_provider rather than naming an empty provider", async () => {
+    writeConfig('[providers.p1]\napi_type = "qwen"\nbase_url = "https://k.example.com"\nmodel = "m"\n');
+
+    const result = await run(["login", "--api-key", API_KEY]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("default_provider");
+    expect(result.stderr).not.toContain('[providers.]');
+  });
+
+  it("tells logout the same thing", async () => {
+    writeConfig('[providers.p1]\napi_type = "qwen"\nbase_url = "https://k.example.com"\nmodel = "m"\n');
+
+    const result = await run(["logout"]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("default_provider");
+  });
+});
+
+describe("mediagen config add: prototype-safe names", () => {
+  it("lists a provider named __proto__ instead of hiding it", async () => {
+    const result = await run([
+      "config", "add", "__proto__",
+      "--api-type", "qwen", "--base-url", "https://k.example.com", "--model", "m",
+    ]);
+    expect(result.code).toBe(0);
+
+    const shown = await run(["config", "show", "--json"]);
+    const names = (JSON.parse(shown.stdout) as { providers: { name: string }[] }).providers.map(
+      (entry) => entry.name,
+    );
+    expect(names).toContain("__proto__");
+  });
+});
+
 describe("mediagen auth status", () => {
   it("reports every provider as unconfigured with no auth file", async () => {
     const result = await run(["auth", "status"]);

@@ -19,8 +19,8 @@ mediagen config add my-proxy --api-type qwen \
 
 mediagen login --provider my-proxy --api-key sk-...
 
-mediagen image generate "a red fox in fresh snow, soft morning light" --out-dir ./out
-# /abs/path/out/dashscope-qwen-image-3-0-20261025-020839-0.png
+mediagen image generate "a red fox in fresh snow, soft morning light" --provider my-proxy --out-dir ./out
+# /abs/path/out/my-proxy-qwen-image-3-0-20261025-020839-0.png
 ```
 
 Node >= 18, two runtime dependencies, a DashScope and/or Ark API key.

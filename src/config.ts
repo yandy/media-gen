@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -38,6 +39,37 @@ export function configPath(): string {
   return path.join(configDir(), "config.toml");
 }
 
+/** The one message every command gives when nothing selects a provider. */
+export function noProviderSelectedMessage(file: string = configPath()): string {
+  return `no provider selected: set "default_provider" in ${file} or pass --provider <name>`;
+}
+
+/**
+ * Replaces config.toml through a temporary file in the same directory, so a crash
+ * or a full disk leaves the previous contents intact instead of a truncated file
+ * that no command can repair (the seed only ever runs when the file is absent).
+ */
+export function writeConfigFile(text: string): string {
+  const file = configPath();
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+  const tmp = path.join(dir, `.config.toml.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(tmp, text);
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // Best effort: the temporary file may never have been created.
+    }
+    throw error;
+  }
+
+  return file;
+}
+
 /**
  * Writes the seed configuration when config.toml is absent, so that the first
  * run leaves the user something with comments to edit rather than a command
@@ -53,7 +85,9 @@ export function ensureConfigFile(): void {
 
   try {
     fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(file, SEED_CONFIG);
+    // "wx" fails instead of truncating, so a concurrent run that is already
+    // writing a config is never clobbered by the seed.
+    fs.writeFileSync(file, SEED_CONFIG, { flag: "wx" });
   } catch {
     // Best effort: losing the seed is recoverable by editing the path by hand,
     // while throwing here would make every command unusable.
@@ -82,7 +116,9 @@ export function loadConfig(): MediagenConfig {
     throw new ConfigError(malformedDocumentMessage(file, "TOML", error));
   }
 
-  const providers: MediagenConfig["providers"] = {};
+  const providers: MediagenConfig["providers"] = Object.create(
+    null,
+  ) as MediagenConfig["providers"];
   const rawProviders = parsed.providers;
   if (rawProviders !== undefined) {
     if (!isTable(rawProviders)) {
@@ -111,11 +147,7 @@ export function loadConfig(): MediagenConfig {
  */
 export function resolveProvider(name: string, config: MediagenConfig): ProviderConfig {
   const file = configPath();
-  if (name === "") {
-    throw new ConfigError(
-      `no provider selected: set "default_provider" in ${file} or pass --provider <name>`,
-    );
-  }
+  if (name === "") throw new ConfigError(noProviderSelectedMessage(file));
 
   const entry = config.providers[name];
   if (entry === undefined) {

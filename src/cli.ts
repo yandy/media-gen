@@ -14,7 +14,7 @@ import {
   saveApiKey,
   type ApiKeySource,
 } from "./auth.js";
-import { configPath, loadConfig, type MediagenConfig, type ProviderOverride } from "./config.js";
+import { configPath, loadConfig, noProviderSelectedMessage, writeConfigFile, type MediagenConfig, type ProviderOverride } from "./config.js";
 import { UsageError } from "./errors.js";
 import { runGenerate, type GenerateOptions } from "./generate.js";
 import { renderError, renderHuman, renderJson, type RenderedOutput } from "./output.js";
@@ -111,7 +111,7 @@ Quickstart:
   mediagen config show                                    # first run writes a commented config.toml
   mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com --model qwen-image-3.0
   mediagen login --provider my-proxy --api-key sk-...      # store a key in auth.json
-  mediagen image generate "a red fox in fresh snow" --out-dir ./out
+  mediagen image generate "a red fox in fresh snow" --provider my-proxy --out-dir ./out
   mediagen image edit "make the sky sunset orange" --image ./photo.jpg
   mediagen image generate "..." --json               # {"ok":..,"files":[..],"errors":[..]}
 
@@ -529,6 +529,7 @@ async function runLogin(flags: LoginFlags, deps: CliDeps): Promise<void> {
  * error that points at the two ways to create one.
  */
 function assertKnownProvider(name: string, config: MediagenConfig): void {
+  if (name === "") throw new UsageError(noProviderSelectedMessage());
   if (Object.hasOwn(config.providers, name)) return;
   throw new UsageError(
     `unknown provider "${name}": login stores API keys but never creates providers; ` +
@@ -597,6 +598,7 @@ function readSecretFromTerminal(promptText: string): Promise<string> {
 function runLogout(flags: ProviderFlags): void {
   const config = loadConfig();
   const name = flags.provider ?? config.default_provider;
+  if (name === "") throw new UsageError(noProviderSelectedMessage());
   const removed = removeApiKey(name);
 
   if (flags.json === true) {
@@ -677,49 +679,63 @@ function runConfigPath(flags: { json?: boolean }): void {
  * Anything else — changing a value, removing an entry — is a text edit by hand.
  */
 function runConfigAdd(name: string, flags: ConfigAddFlags): void {
+  const provider = name.trim();
+  if (provider === "") throw new UsageError("a provider name is required");
+
   const apiType = parseChoice(flags.apiType, ["qwen", "ark"], "--api-type");
   if (apiType === undefined) {
     throw new UsageError('--api-type is required: "qwen" or "ark"');
   }
   if (flags.baseUrl === undefined) throw new UsageError("--base-url is required");
-  if ((flags.model ?? "").trim() === "") throw new UsageError("--model is required");
+
+  const model = (flags.model ?? "").trim();
+  if (model === "") throw new UsageError("--model is required");
+  // A blank optional field would be written out as an empty string, and an empty
+  // `path` in particular survives `path ?? default` and sends the request to the
+  // bare host, so the field is either sane or absent.
+  const pathOverride = flags.path?.trim();
+  if (flags.path !== undefined && pathOverride === "") {
+    throw new UsageError("--path must not be empty");
+  }
+  const apiKeyEnv = flags.apiKeyEnv?.trim();
+  if (flags.apiKeyEnv !== undefined && apiKeyEnv === "") {
+    throw new UsageError("--api-key-env must not be empty");
+  }
 
   const file = configPath();
   // loadConfig() also seeds the file when it is absent, so the append below sees
   // the same surroundings the user will.
   const config = loadConfig();
-  if (Object.hasOwn(config.providers, name)) {
+  if (Object.hasOwn(config.providers, provider)) {
     throw new UsageError(
-      `provider "${name}" already exists in ${file}; edit that table by hand instead`,
+      `provider "${provider}" already exists in ${file}; edit that table by hand instead`,
     );
   }
 
   const fields: Record<string, string> = {
     api_type: apiType,
     base_url: normalizeBaseUrl(flags.baseUrl),
-    model: flags.model ?? "",
+    model,
   };
-  if (flags.path !== undefined) fields.path = flags.path;
-  if (flags.apiKeyEnv !== undefined) fields.api_key_env = flags.apiKeyEnv;
+  if (pathOverride !== undefined) fields.path = pathOverride;
+  if (apiKeyEnv !== undefined) fields.api_key_env = apiKeyEnv;
 
   const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
   const beforeTable = before.trim() === "" ? undefined : parseToml(before);
-  const after = appendProviderTable(before, name, fields);
-  assertFaithfulRewrite(beforeTable, after, name, fields, file);
-
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(file, after);
+  const after = appendProviderTable(before, provider, fields);
+  assertFaithfulRewrite(beforeTable, after, provider, fields, file);
+  writeConfigFile(after);
 
   if (flags.json === true) {
-    writeLine(JSON.stringify({ ok: true, provider: name, config_file: file, fields }));
+    writeLine(JSON.stringify({ ok: true, provider, config_file: file, fields }));
     return;
   }
 
   const keyRoute =
-    flags.apiKeyEnv === undefined
-      ? `run "mediagen login --provider ${name} --api-key ..." to store its key`
-      : `set ${flags.apiKeyEnv}, or run "mediagen login --provider ${name} --api-key ..."`;
-  writeLine([`added provider "${name}" to ${file}`, keyRoute].join("\n"));
+    apiKeyEnv === undefined
+      ? `run "mediagen login --provider ${provider} --api-key ..." to store its key`
+      : `set ${apiKeyEnv}, or run "mediagen login --provider ${provider} --api-key ..."`;
+  writeLine([`added provider "${provider}" to ${file}`, keyRoute].join("\n"));
 }
 
 function runConfigShow(flags: { json?: boolean }): void {
@@ -845,9 +861,12 @@ function keyStatus(name: string, apiKeyEnv: string | undefined): KeyStatus {
 }
 
 function normalizeBaseUrl(value: string): string {
+  // new URL() tolerates surrounding whitespace, so trim first: whatever passes
+  // validation is exactly what gets persisted and concatenated with the path.
+  const trimmed = value.trim();
   let url: URL;
   try {
-    url = new URL(value);
+    url = new URL(trimmed);
   } catch {
     throw new UsageError(
       `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) URL`,
@@ -859,7 +878,7 @@ function normalizeBaseUrl(value: string): string {
     );
   }
   // Trailing slashes would double up with the provider path.
-  return value.replace(/\/+$/, "");
+  return trimmed.replace(/\/+$/, "");
 }
 
 /** Appends a complete `[providers.<name>]` table; the caller checked it is absent. */
