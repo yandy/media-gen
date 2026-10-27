@@ -65,7 +65,6 @@ interface ProviderView {
 interface LoginFlags {
   provider?: string;
   apiKey?: string;
-  baseUrl?: string;
   json?: boolean;
 }
 
@@ -109,18 +108,20 @@ const ROOT_HELP = `
 Built for AI agents: explicit flags, no interactive prompts, machine-readable output.
 
 Quickstart:
-  mediagen login --provider qwen --api-key sk-...    # store a key in auth.json
-  mediagen login --provider qwen --base-url https://proxy.example.com  # endpoint only; key from env
+  mediagen config show                                    # first run writes a commented config.toml
+  mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com --model qwen-image-3.0
+  mediagen login --provider my-proxy --api-key sk-...      # store a key in auth.json
   mediagen image generate "a red fox in fresh snow" --out-dir ./out
   mediagen image edit "make the sky sunset orange" --image ./photo.jpg
   mediagen image generate "..." --json               # {"ok":..,"files":[..],"errors":[..]}
 
 Subcommands:
-  login / logout    store or remove an API key, or set a base_url override; provider
+  login / logout    store or remove a provider's API key in auth.json; provider
                     definitions live in config.toml
   auth status       which key each provider would use and where it came from (masked)
   config show       the resolved configuration, with a source note per value
   config path       where config.toml lives
+  config add        create a provider in config.toml (edit the file for anything else)
 
 Exit codes: 0 success (including a partial success that saved at least one file),
 1 an API/config/runtime failure, 2 a usage error.
@@ -275,10 +276,9 @@ export function createProgram(options: ProgramOptions = {}): Command {
 
   program
     .command("login")
-    .description("Store an API key for a provider in auth.json (mode 600), or set only its base_url")
+    .description("Store an API key for a provider in auth.json (mode 600)")
     .option("--provider <name>", "provider name (default: config default_provider)")
-    .option("--api-key <key>", "the key; omit to be prompted (needs a TTY), or omit with --base-url to change only the endpoint")
-    .option("--base-url <url>", "point this provider's base_url at a URL in config.toml; alone it stores no key")
+    .option("--api-key <key>", "the key; omit to be prompted (needs a TTY)")
     .option("--json", "print a JSON result")
     .action(async (flags: LoginFlags) => {
       await runLogin(flags, deps);
@@ -502,86 +502,24 @@ async function runLogin(flags: LoginFlags, deps: CliDeps): Promise<void> {
   const config = loadConfig();
   const name = flags.provider ?? config.default_provider;
   assertKnownProvider(name, config);
-  // Validated before anything is written, so a bad URL cannot leave a half-updated config.
-  const baseUrl = flags.baseUrl === undefined ? undefined : normalizeBaseUrl(flags.baseUrl);
-
-  // `--base-url` on its own is a pure endpoint override: it rewrites config.toml
-  // and must neither read nor store a key, because the third-party-proxy case is
-  // "point the built-in provider elsewhere, the key comes from the environment".
-  if (baseUrl !== undefined && (flags.apiKey?.trim() ?? "") === "") {
-    runBaseUrlOnlyLogin(name, baseUrl, config, flags.json === true);
-    return;
-  }
 
   const key = await resolveLoginKey(name, flags.apiKey, deps);
-  // Rewrite the config before storing the key: a refused rewrite must leave no
-  // half-configured provider with a fresh key attached to it.
-  const configFile = baseUrl === undefined ? undefined : setProviderBaseUrl(name, baseUrl);
   saveApiKey(name, key);
 
   const masked = maskKey(key);
   if (flags.json === true) {
-    const payload: Record<string, unknown> = {
-      ok: true,
-      provider: name,
-      masked_key: masked,
-      auth_file: authPath(),
-    };
-    if (baseUrl !== undefined) payload.base_url = baseUrl;
-    if (configFile !== undefined) payload.config_file = configFile;
-    writeLine(JSON.stringify(payload));
-    return;
-  }
-
-  const lines = [`saved API key ${masked} for provider "${name}" to ${authPath()}`];
-  if (baseUrl !== undefined && configFile !== undefined) {
-    lines.push(`set base_url for provider "${name}" to ${baseUrl} in ${configFile}`);
-  }
-  writeLine(lines.join("\n"));
-}
-
-/**
- * `mediagen login --provider P --base-url U` with no `--api-key`: writes only
- * base_url to config.toml and tells the user where the key has to come from,
- * since nothing was stored and no prompt was shown.
- */
-function runBaseUrlOnlyLogin(
-  name: string,
-  baseUrl: string,
-  config: MediagenConfig,
-  json: boolean,
-): void {
-  const configFile = setProviderBaseUrl(name, baseUrl);
-
-  if (json) {
     writeLine(
       JSON.stringify({
         ok: true,
         provider: name,
-        base_url: baseUrl,
-        config_file: configFile,
-        api_key_stored: false,
+        masked_key: masked,
+        auth_file: authPath(),
       }),
     );
     return;
   }
 
-  writeLine(
-    [
-      `set base_url for provider "${name}" to ${baseUrl} in ${configFile}`,
-      `no API key was stored: ${keyRouteHint(name, config)}`,
-    ].join("\n"),
-  );
-}
-
-/** How provider `name` gets its key now that login stored none. */
-function keyRouteHint(name: string, config: MediagenConfig): string {
-  const keyEnv = config.providers[name]?.api_key_env;
-  const route =
-    keyEnv === undefined
-      ? `declare api_key_env under [providers.${tomlKey(name)}] in ${configPath()} and set that variable`
-      : `set the ${keyEnv} environment variable`;
-  return `${route}, or run "mediagen login --provider ${name} --api-key ..." to store one`;
+  writeLine(`saved API key ${masked} for provider "${name}" to ${authPath()}`);
 }
 
 /**
@@ -923,25 +861,6 @@ function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
-/**
- * Sets `base_url` for one provider in config.toml by editing the text in place,
- * so comments, key order and unrelated settings all survive. The rewrite is
- * verified by re-parsing before it touches the file: if anything else changed,
- * the user is told to edit config.toml by hand rather than losing settings.
- */
-function setProviderBaseUrl(name: string, baseUrl: string): string {
-  const file = configPath();
-  const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-  const beforeTable = before.trim() === "" ? undefined : parseToml(before);
-
-  const after = applyBaseUrl(before, name, baseUrl);
-  assertFaithfulRewrite(beforeTable, after, name, { base_url: baseUrl }, file);
-
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(file, after);
-  return file;
-}
-
 /** Appends a complete `[providers.<name>]` table; the caller checked it is absent. */
 function appendProviderTable(text: string, name: string, fields: Record<string, string>): string {
   const lines = [`[providers.${tomlKey(name)}]`];
@@ -950,77 +869,6 @@ function appendProviderTable(text: string, name: string, fields: Record<string, 
   }
   const base = text.trim() === "" ? "" : text.endsWith("\n") ? `${text}\n` : `${text}\n\n`;
   return `${base}${lines.join("\n")}\n`;
-}
-
-function applyBaseUrl(text: string, name: string, baseUrl: string): string {
-  const assignment = `base_url = ${tomlBasicString(baseUrl)}`;
-  const lines = text.split("\n");
-  const header = providerHeaderPattern(name);
-  const headerIndex = lines.findIndex((line) => header.test(line));
-
-  if (headerIndex === -1) {
-    const section = [`[providers.${tomlKey(name)}]`, assignment];
-    if (text.trim() === "") return `${section.join("\n")}\n`;
-    const base = text.endsWith("\n") ? text : `${text}\n`;
-    return `${base}\n${section.join("\n")}\n`;
-  }
-
-  // The section runs up to the next table header, so a stray top-level key
-  // after it is never mistaken for a provider setting.
-  const nextHeader = lines.findIndex(
-    (line, index) => index > headerIndex && /^\s*\[/.test(line),
-  );
-  const end = nextHeader === -1 ? lines.length : nextHeader;
-
-  for (let index = headerIndex + 1; index < end; index += 1) {
-    if (/^\s*base_url\s*=/.test(lines[index])) {
-      lines[index] = replaceAssignment(lines[index], assignment);
-      return lines.join("\n");
-    }
-  }
-
-  lines.splice(headerIndex + 1, 0, assignment);
-  return lines.join("\n");
-}
-
-/** Keeps an inline comment on the line whose value is being replaced. */
-function replaceAssignment(line: string, assignment: string): string {
-  const commentStart = findCommentStart(line);
-  if (commentStart === -1) return assignment;
-  return `${assignment}  ${line.slice(commentStart)}`;
-}
-
-/** Index of a `#` that begins an inline comment: outside a string, preceded by whitespace. */
-function findCommentStart(line: string): number {
-  let quote: string | null = null;
-  let index = 0;
-
-  while (index < line.length) {
-    const char = line[index];
-
-    if (quote !== null) {
-      if (char === "\\") index += 1;
-      else if (char === quote) quote = null;
-    } else if (char === '"' || char === "'") {
-      quote = char;
-    } else if (char === "#" && (index === 0 || /\s/.test(line[index - 1]))) {
-      return index;
-    }
-
-    index += 1;
-  }
-
-  return -1;
-}
-
-function providerHeaderPattern(name: string): RegExp {
-  const forms = [`"${escapeRegex(name)}"`, `'${escapeRegex(name)}'`];
-  if (isBareTomlKey(name)) forms.unshift(escapeRegex(name));
-  return new RegExp(`^\\s*\\[\\s*providers\\s*\\.\\s*(?:${forms.join("|")})\\s*]\\s*(?:#.*)?$`);
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function isBareTomlKey(value: string): boolean {

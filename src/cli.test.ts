@@ -630,6 +630,16 @@ describe("mediagen login", () => {
     expect(loadAuth().providers["my-proxy"]?.api_key).toBe(API_KEY);
   });
 
+  it("rejects --base-url: endpoints are configured in config.toml", async () => {
+    const result = await run([
+      "login",
+      "--provider", "dashscope",
+      "--base-url", "https://x.example.com",
+    ]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("--base-url");
+  });
 });
 
 describe("mediagen logout", () => {
