@@ -11,7 +11,6 @@ import {
   saveApiKey,
 } from "./auth.js";
 import { ConfigError } from "./errors.js";
-import { BUILTIN_PROVIDERS } from "./providers.js";
 import type { ProviderConfig } from "./types.js";
 
 const originalEnv = {
@@ -23,11 +22,29 @@ const originalEnv = {
 let tempDir: string;
 
 function qwen(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
-  return { ...BUILTIN_PROVIDERS.qwen, ...overrides };
+  return {
+    name: "dashscope",
+    api_type: "qwen",
+    base_url: "https://dashscope.aliyuncs.com",
+    model: "qwen-image-3.0",
+    path: "/compatible-mode/v1/images/generations",
+    api_key_env: "DASHSCOPE_API_KEY",
+    custom: false,
+    ...overrides,
+  };
 }
 
 function ark(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
-  return { ...BUILTIN_PROVIDERS.ark, ...overrides };
+  return {
+    name: "volcengine",
+    api_type: "ark",
+    base_url: "https://ark.cn-beijing.volces.com",
+    model: "doubao-seedream-5-0-flash-260915",
+    path: "/api/v3/images/generations",
+    api_key_env: "ARK_API_KEY",
+    custom: false,
+    ...overrides,
+  };
 }
 
 function withoutApiKeyEnv(provider: ProviderConfig): ProviderConfig {
@@ -246,7 +263,7 @@ describe("maskKey", () => {
 
 describe("resolveApiKey", () => {
   it("prefers the flag key over env and auth", () => {
-    saveApiKey("qwen", "sk-auth-aaaa");
+    saveApiKey("dashscope", "sk-auth-aaaa");
 
     const resolved = resolveApiKey(qwen(), "sk-flag-cccc", { DASHSCOPE_API_KEY: "sk-env-bbbb" });
 
@@ -267,33 +284,24 @@ describe("resolveApiKey", () => {
     expect(resolved).toEqual({ key: "sk-custom-dddd", source: "env" });
   });
 
-  it("prefers api_key_env over the built-in env var for a built-in provider name", () => {
-    const resolved = resolveApiKey(qwen({ api_key_env: "MY_QWEN_KEY" }), undefined, {
-      MY_QWEN_KEY: "sk-configured-eeee",
-      DASHSCOPE_API_KEY: "sk-builtin-ffff",
-    });
+  it("never reads a built-in env var for a provider that declares no api_key_env", () => {
+    const legacy = withoutApiKeyEnv(qwen({ name: "qwen" }));
 
-    expect(resolved).toEqual({ key: "sk-configured-eeee", source: "env" });
+    const resolved = resolveApiKey(legacy, undefined, { DASHSCOPE_API_KEY: "sk-qwen-builtin" });
+
+    expect(resolved).toBeNull();
   });
 
-  it("falls back to the built-in env var for qwen when api_key_env is absent", () => {
-    const resolved = resolveApiKey(withoutApiKeyEnv(qwen()), undefined, {
-      DASHSCOPE_API_KEY: "sk-qwen-builtin",
-    });
+  it("still falls back to auth.json when the provider names no api_key_env", () => {
+    saveApiKey("dashscope", "sk-auth-aaaa");
 
-    expect(resolved).toEqual({ key: "sk-qwen-builtin", source: "env" });
-  });
+    const resolved = resolveApiKey(withoutApiKeyEnv(qwen()), undefined, {});
 
-  it("falls back to the built-in env var for ark when api_key_env is absent", () => {
-    const resolved = resolveApiKey(withoutApiKeyEnv(ark()), undefined, {
-      ARK_API_KEY: "sk-ark-builtin",
-    });
-
-    expect(resolved).toEqual({ key: "sk-ark-builtin", source: "env" });
+    expect(resolved).toEqual({ key: "sk-auth-aaaa", source: "auth" });
   });
 
   it("prefers env over auth.json", () => {
-    saveApiKey("qwen", "sk-auth-aaaa");
+    saveApiKey("dashscope", "sk-auth-aaaa");
 
     const resolved = resolveApiKey(qwen(), undefined, { DASHSCOPE_API_KEY: "sk-env-bbbb" });
 
@@ -301,7 +309,7 @@ describe("resolveApiKey", () => {
   });
 
   it("falls back to auth.json when no flag or env key is available", () => {
-    saveApiKey("qwen", "sk-auth-aaaa");
+    saveApiKey("dashscope", "sk-auth-aaaa");
 
     const resolved = resolveApiKey(qwen(), undefined, {});
 
@@ -309,7 +317,7 @@ describe("resolveApiKey", () => {
   });
 
   it("treats an empty env value as absent", () => {
-    saveApiKey("qwen", "sk-auth-aaaa");
+    saveApiKey("dashscope", "sk-auth-aaaa");
 
     const resolved = resolveApiKey(qwen(), undefined, { DASHSCOPE_API_KEY: "" });
 

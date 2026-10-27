@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { configDir } from "./config.js";
 import { ConfigError, malformedDocumentMessage, unreadableFileMessage } from "./errors.js";
-import { BUILTIN_PROVIDERS } from "./providers.js";
 import type { ProviderConfig } from "./types.js";
 
 export interface AuthFile {
@@ -65,11 +64,15 @@ export function maskKey(key: string): string {
 
 /**
  * Resolve the API key for `provider`, highest precedence first:
- * `--api-key` flag > provider `api_key_env` > built-in env var > auth.json.
+ * `--api-key` flag > the provider's own `api_key_env` > auth.json.
+ *
+ * A key belongs to a provider instance, never to a dialect: nothing here knows
+ * which environment variable a `qwen` or `ark` provider "usually" uses, so two
+ * entries of the same dialect can never pick up each other's credentials.
  * Returns `null` when no source is configured; the caller decides the message.
  */
 export function resolveApiKey(
-  provider: ProviderConfig,
+  provider: Pick<ProviderConfig, "name" | "api_key_env">,
   flagKey: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): ResolvedApiKey | null {
@@ -78,12 +81,6 @@ export function resolveApiKey(
   const configuredEnv = provider.api_key_env;
   if (configuredEnv) {
     const value = env[configuredEnv];
-    if (value) return { key: value, source: "env" };
-  }
-
-  const builtinEnv = BUILTIN_PROVIDERS[provider.name]?.api_key_env;
-  if (builtinEnv && builtinEnv !== configuredEnv) {
-    const value = env[builtinEnv];
     if (value) return { key: value, source: "env" };
   }
 
