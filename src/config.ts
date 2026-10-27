@@ -215,13 +215,26 @@ function resolveBaseUrl(name: string, apiType: Dialect, file: string, value: str
   const normalized = normalizeHttpBaseUrl(value);
   if (normalized !== undefined) return normalized;
 
+  const table = `[providers.${tomlKey(name)}] in ${file}`;
+  // The seed ships this placeholder, so it is the likeliest bad value in the
+  // file and deserves its own sentence: "expected X, like X" would only repeat
+  // the user's own text back at them without naming what to do.
+  if (value.includes("<")) {
+    throw new ConfigError(
+      `base_url under ${table} still contains the placeholder ${JSON.stringify(value)}: ` +
+        `replace <workspace-id> with your Bailian workspace id, e.g. ` +
+        `"https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"`,
+    );
+  }
+
   const example =
     apiType === "qwen"
-      ? "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1 (replace <workspace-id>)"
+      ? "https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
       : "https://ark.cn-beijing.volces.com/api/v3";
   throw new ConfigError(
-    `provider "${name}" in ${file} has invalid base_url ${JSON.stringify(value)}: ` +
-      `expected an absolute http(s) URL ending at the version segment, like ${example}`,
+    `provider "${name}" has invalid base_url ${JSON.stringify(value)} under ${table}: ` +
+      `expected an absolute http(s) URL ending at the version segment, ` +
+      `without credentials, query or fragment, e.g. ${example}`,
   );
 }
 

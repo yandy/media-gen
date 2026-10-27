@@ -342,7 +342,7 @@ describe("resolveProvider", () => {
     expect(error.message).toContain("model");
   });
 
-  it("rejects a base_url that is not an absolute http(s) URL", () => {
+  it("names the seeded placeholder instead of repeating it as an example", () => {
     writeConfig(
       '[providers.qwen]\napi_type = "qwen"\nbase_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"\nmodel = "m"\n',
     );
@@ -351,7 +351,21 @@ describe("resolveProvider", () => {
 
     expect(error).toBeInstanceOf(ConfigError);
     expect(error.message).toContain("base_url");
-    expect(error.message).toContain("workspace-id");
+    expect(error.message).toContain("placeholder");
+    expect(error.message).toContain("config.toml");
+    // The user's own value is the thing to change: no "expected X, like X".
+    expect(error.message).toContain("https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1");
+    expect(error.message).not.toContain("like https://<workspace-id>");
+  });
+
+  it("rejects a base_url that is not an absolute http(s) URL", () => {
+    writeConfig('[providers.ark]\napi_type = "ark"\nbase_url = "not-a-url"\nmodel = "m"\n');
+
+    const error = thrownBy(() => resolveProvider("ark", loadConfig()));
+
+    expect(error).toBeInstanceOf(ConfigError);
+    expect(error.message).toContain("base_url");
+    expect(error.message).toContain("https://ark.cn-beijing.volces.com/api/v3");
     expect(error.message).toContain("config.toml");
   });
 

@@ -98,7 +98,7 @@ function normalizeBaseUrl(value: string): string {
   const normalized = normalizeHttpBaseUrl(value);
   if (normalized === undefined) {
     throw new UsageError(
-      `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) URL without query or fragment`,
+      `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) URL without credentials, query or fragment`,
     );
   }
   return normalized;

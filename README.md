@@ -103,8 +103,9 @@ api_key_env = "MY_PROXY_KEY"
 A provider is one API dialect (`api_type`, either `qwen` or `ark`) plus one concrete
 entry point (`base_url` + `model`). Those three fields are required; `api_key_env` is
 optional. **`base_url` runs up to the version segment** — the dialect appends the
-endpoint file name (`/images/generations`) for you, so `https://host/v1` plus
-`https://host/v1/compatible-mode/v1` is the classic double-prefix mistake. The file
+endpoint file name (`/images/generations`) for you, so `https://host/v1` yields
+`https://host/v1/images/generations`; writing the version segment twice yields
+`.../compatible-mode/v1/compatible-mode/v1/images/generations`, which 404s. The file
 is the only source of truth: nothing is built in, and the first run just writes the
 above into `config.toml` for you to edit. The seeded qwen entry carries a
 `<workspace-id>` placeholder which every command rejects before spending anything,
@@ -113,7 +114,8 @@ so only that line needs your attention.
 A key belongs to a provider entry: `--api-key`, else that entry's `api_key_env`,
 else `auth.json`. There is no dialect-level default key variable, so two entries of
 the same dialect can use different keys. Keys are only ever printed masked.
-`base_url` can only be set in the file, and it is validated before any request: for
+`base_url` lives in the file (with a one-off `--base-url` override on
+`image generate`), and it is validated before any request: for
 qwen, the public host answers the images endpoint with a `404`, so the seed keeps a
 placeholder that fails loudly instead. `mediagen config show` prints the endpoint
 each provider would actually hit. Set `NODE_USE_ENV_PROXY=1` on Node >= 24
@@ -141,7 +143,8 @@ Worth preserving: every check runs before the first `fetch`; paid requests are
 never retried; stdout carries the result only; no output path ever holds an
 unmasked key. A provider speaking an existing dialect needs no code — only a
 `config.toml` table. A new dialect means an adapter in `src/api/`, a row in
-`DIALECTS` (`src/api/index.ts`) and a default path in `src/providers.ts`.
+`DIALECTS` (`src/api/index.ts`) plus its `path` field — the endpoint file name the
+dialect appends to `base_url`.
 
 Release: `npm pack --dry-run` to inspect the tarball (`dist/` and `skills/` are
 published), then `npm version patch && npm publish`. Design docs live in

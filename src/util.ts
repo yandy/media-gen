@@ -26,12 +26,20 @@ export function isUrl(value: string): boolean {
 
 /**
  * Normalizes a base URL for concatenation with a dialect endpoint: absolute
- * http(s) only, no query or fragment (they would be swallowed by the appended
- * path), trailing slashes removed. Returns undefined when `value` does not
- * qualify, so each caller can raise its own error class.
+ * http(s) only, no credentials, no query or fragment, trailing slashes removed.
+ * Returns undefined when `value` does not qualify, so each caller can raise its
+ * own error class.
+ *
+ * The delimiter test runs on the raw string: `URL` reports an empty `search` and
+ * `hash` for a dangling `?` or `#`, yet the literal concatenation would still
+ * swallow the endpoint (`https://h/v1?` + `/images/generations` sends
+ * `path=/v1&query=?/images/generations`). Credentials are refused for the same
+ * reason they are refused in a log line: every caller echoes `base_url` back.
  */
 export function normalizeHttpBaseUrl(value: string): string | undefined {
   const trimmed = value.trim();
+  if (/[?#]/.test(trimmed)) return undefined;
+
   let url: URL;
   try {
     url = new URL(trimmed);
@@ -39,7 +47,7 @@ export function normalizeHttpBaseUrl(value: string): string | undefined {
     return undefined;
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-  if (url.search !== "" || url.hash !== "") return undefined;
+  if (url.username !== "" || url.password !== "") return undefined;
   return trimmed.replace(/\/+$/, "");
 }
 

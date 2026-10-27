@@ -106,7 +106,7 @@ api_key_env = "MY_PROXY_KEY"
 
 key 跟着 provider 实例走，依次来自 `--api-key`、该实例声明的 `api_key_env`、
 `auth.json`。没有任何方言级的默认 key 变量，所以同一方言的两条入口可以各用各的 key。
-key 永远只以打码形式输出。`base_url` 只能写在文件里，并且会在发请求前校验：对 qwen
+key 永远只以打码形式输出。`base_url` 写在文件里（`image generate` 有一次性的 `--base-url` 覆盖），并且会在发请求前校验：对 qwen
 来说公共域名直接就是 `404`，所以种子保留一个会明确失败的占位符。`mediagen config show`
 会打印每条 provider 实际会请求的 endpoint。Node >= 24 上设 `NODE_USE_ENV_PROXY=1` 可走 `HTTP_PROXY`。
 超时：每次请求 300 秒，每次下载 120 秒。
@@ -132,7 +132,8 @@ npm run dev -- image generate --help
 值得守住的东西：所有检查都在第一次 `fetch` 之前完成；付费请求从不重试；stdout 只
 放结果；任何输出路径都不含未打码的 key。说现有方言的新 provider 不需要写代码 ——
 一张 `config.toml` 表就够。新方言则是 `src/api/` 下的适配器、`DIALECTS`
-（`src/api/index.ts`）里的一行，以及 `src/providers.ts` 里的默认路径。
+（`src/api/index.ts`）里的一行，以及适配器上的 `path` 字段 —— 方言拼在 `base_url`
+后面的那个端点文件名。
 
 发布：`npm pack --dry-run` 检查 tarball（发布 `dist/` 和 `skills/`），然后
 `npm version patch && npm publish`。设计文档在 `docs/superpowers/specs/`。
