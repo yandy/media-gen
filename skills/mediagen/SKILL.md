@@ -24,24 +24,42 @@ file and prints the path. Each successful call is a paid API request.
 
 ## One-time setup
 
+Nothing is built in: a provider is declared in `config.toml`, which the first run
+writes with two commented entries (`dashscope`, `volcengine`).
+
 ```bash
-# qwen needs BOTH a key and its workspace-scoped host; the built-in host 404s:
-mediagen login --provider qwen --base-url https://<workspace-id>.cn-beijing.maas.aliyuncs.com
-mediagen login --provider qwen --api-key sk-...   # stored in auth.json, mode 600
-mediagen login --provider ark  --api-key sk-...   # ark needs no host step
-mediagen auth status                              # which key each provider would use
+mediagen config show        # first run creates config.toml; this prints what resolves
 ```
 
-`DASHSCOPE_API_KEY` (qwen) and `ARK_API_KEY` (ark) work instead of `login`, and
-`--api-key sk-...` overrides both for a single call; no variable sets the host,
-so qwen still needs the `base_url` step above. Never echo a key back to the
-user; the CLI only ever prints it masked.
+qwen needs its workspace-scoped host, and the public host 404s, so edit
+`[providers.dashscope].base_url` in `config.toml` to
+`https://<workspace-id>.cn-beijing.maas.aliyuncs.com` (ark needs no host edit).
+To add another entry without hand-editing:
+
+```bash
+mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com \
+  --model qwen-image-3.0 --api-key-env MY_PROXY_KEY
+```
+
+Then store keys:
+
+```bash
+mediagen login --provider dashscope --api-key sk-...   # stored in auth.json, mode 600
+mediagen login --provider volcengine --api-key sk-...
+mediagen auth status                                   # which key each provider would use
+```
+
+A key belongs to a provider entry: the `--api-key` flag overrides its
+`api_key_env` environment variable, which overrides `auth.json`. There is no
+dialect-level default key variable. No variable sets the host — hosts live only in
+`config.toml`. Never echo a key back to the user; the CLI only ever prints it
+masked.
 
 ## Commands
 
 ```bash
 # text to image; files land in --out-dir (default: output_dir in config.toml, else the cwd)
-# qwen: only after the base_url step above; --provider ark works without it
+# --provider names an entry in config.toml; dashscope needs its workspace base_url first
 mediagen image generate "a red fox in fresh snow, soft morning light" --out-dir ./out
 
 # edit one local image (local paths are read and sent as base64 data URLs)
@@ -52,7 +70,7 @@ mediagen image edit "the character from the first image wearing the jacket from 
   --image ./character.png --image ./jacket.png
 
 # machine-readable, for parsing paths and errors
-mediagen image generate "minimalist logo for a coffee roastery" --provider ark --n 4 --seed 42 --json
+mediagen image generate "minimalist logo for a coffee roastery" --provider volcengine --n 4 --seed 42 --json
 ```
 
 Add `--json` whenever you intend to parse the result. Without it, stdout is one
@@ -62,12 +80,15 @@ absolute file path per line and warnings go to stderr.
 
 | model | how to select | pick it when |
 |---|---|---|
-| `qwen-image-3.0` | `--provider qwen` (the default; needs its workspace `base_url`) | text rendering (CJK + Latin) and image editing |
-| seedream 5.0 flash | `--provider ark` | speed: drafts, iteration, many variants |
-| seedream 5.0 pro | `--provider ark --model doubao-seedream-5-0-pro` | highest quality; slower and more expensive |
+| `qwen-image-3.0` | `--provider dashscope` (the default; needs its workspace `base_url`) | text rendering (CJK + Latin) and image editing |
+| seedream 5.0 flash | `--provider volcengine` | speed: drafts, iteration, many variants |
+| seedream 5.0 pro | `--provider volcengine --model doubao-seedream-5-0-pro` | highest quality; slower and more expensive |
 
-Vendor ids are dated snapshots: override with `--model` (`mediagen config show`
-prints the id in use). `--provider` picks the dialect and response shape.
+`dashscope` / `volcengine` are the two names the first run writes into
+`config.toml`; they are the seed's choices, not built-ins. Vendor ids are dated
+snapshots: override with `--model` (`mediagen config show` prints the id in use).
+`--provider` picks the entry point, and the entry's `api_type` picks the dialect
+and response shape.
 
 ## Counting images
 
@@ -81,7 +102,7 @@ on ark costs four requests. Keep `--n` at 1 while iterating on a prompt.
 - Exit 0 with `partial: true`: some images arrived, some failed. The files on
   disk were already paid for — report them and do not re-run the whole request.
 - Exit 1: an API/config failure; the message says what to change — a qwen `404`
-  names the workspace host and prints the `mediagen login --base-url` fix. No files.
+  names the workspace host and points at `config.toml`. No files.
 - Exit 2: a usage error (bad flag, bad `--size`, `--n` outside 1-6, an
   `--out-dir` that cannot be created, or a vendor-specific flag sent to the
   wrong dialect). Fix the command; nothing was sent or paid for.

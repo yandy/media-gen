@@ -7,8 +7,6 @@ export interface ProviderConfig {
   model: string;
   path: string;
   api_key_env?: string;
-  /** Set for providers that only exist in config.toml (no built-in defaults). */
-  custom: boolean;
 }
 
 export interface ImageRequest {

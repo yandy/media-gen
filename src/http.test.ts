@@ -21,7 +21,6 @@ function provider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     base_url: "https://dashscope.example.com",
     model: "qwen-image-3.0",
     path: QWEN_PATH,
-    custom: false,
     ...overrides,
   };
 }
@@ -418,24 +417,25 @@ describe("callImageApi: a 404 with an empty body", () => {
     expect(error.message).toContain("404");
     expect(error.message).toContain("dashscope.aliyuncs.com");
     expect(error.message).toContain("maas.aliyuncs.com");
-    expect(error.message).toContain("mediagen login --provider qwen --base-url");
-    expect(error.message).toContain("base_url");
+    // The remedy lives in config.toml; there is no login flag for a host any more.
+    expect(error.message).not.toContain("mediagen login");
+    expect(error.message).toContain("config.toml");
     expect(error.message).not.toContain(API_KEY);
   });
 
-  it("reports the workspace host for a qwen-dialect custom provider too", async () => {
+  it("reports the workspace host for a hand-declared qwen entry too", async () => {
     stubFetch(() => new Response("", { status: 404 }));
 
     const error = await rejection(
       callImageApi({
-        provider: provider({ name: "my-qwen", base_url: "https://relay.example.com", custom: true }),
+        provider: provider({ name: "my-qwen", base_url: "https://relay.example.com" }),
         apiKey: API_KEY,
         request: imageRequest(),
       }),
     );
 
     expect(error.message).toContain("relay.example.com");
-    expect(error.message).toContain("mediagen login --provider my-qwen --base-url");
+    expect(error.message).toContain("[providers.my-qwen]");
     expect(error.message).toContain("maas.aliyuncs.com");
   });
 

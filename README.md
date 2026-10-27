@@ -9,11 +9,18 @@ interactive prompts, `--json` for programs.
 ```bash
 npm install -g @yandy0725/mediagen-cli
 
-# qwen only, once: the built-in host does not serve the images API
-mediagen login --provider qwen --base-url https://<workspace-id>.cn-beijing.maas.aliyuncs.com
+# The first run writes a commented config.toml; edit it directly.
+mediagen config show
 
-mediagen image generate "a red fox in fresh snow, soft morning light" --out-dir ./out
-# /abs/path/out/qwen-qwen-image-3-0-20261025-020839-0.png
+# Add an entry (one dialect can back several, each with its own host and model)
+mediagen config add my-proxy --api-type qwen \
+  --base-url https://<workspace-id>.cn-beijing.maas.aliyuncs.com \
+  --model qwen-image-3.0 --api-key-env DASHSCOPE_API_KEY
+
+mediagen login --provider my-proxy --api-key sk-...
+
+mediagen image generate "a red fox in fresh snow, soft morning light" --provider my-proxy --out-dir ./out
+# /abs/path/out/my-proxy-qwen-image-3-0-20261025-020839-0.png
 ```
 
 Node >= 18, two runtime dependencies, a DashScope and/or Ark API key.
@@ -26,6 +33,7 @@ Node >= 18, two runtime dependencies, a DashScope and/or Ark API key.
 | `mediagen image edit <prompt>` | the same, with `--image` required |
 | `mediagen login` / `logout` / `auth status` | store, remove, inspect API keys |
 | `mediagen config show` / `config path` | resolved config, and where it lives |
+| `mediagen config add <name>` | create a provider in config.toml; everything else is a manual edit |
 
 `mediagen image generate --help` is the reference: every flag, the model table, the
 size reference, examples. Everything below is the short version.
@@ -34,11 +42,13 @@ size reference, examples. Everything below is the short version.
 
 | model | provider | pick it when |
 |---|---|---|
-| `qwen-image-3.0` | `--provider qwen` | text rendering (CJK + Latin), editing |
-| `doubao-seedream-5-0-flash-260915` | `--provider ark` | speed: drafts, iteration |
-| `doubao-seedream-5-0-pro` | `--provider ark --model doubao-seedream-5-0-pro` | highest quality |
+| `qwen-image-3.0` | `--provider dashscope` | text rendering (CJK + Latin), editing |
+| `doubao-seedream-5-0-flash-260915` | `--provider volcengine` | speed: drafts, iteration |
+| `doubao-seedream-5-0-pro` | `--provider volcengine --model doubao-seedream-5-0-pro` | highest quality |
 
-Ids are dated snapshots, so override any of them with `--model` or in `config.toml`.
+`dashscope` and `volcengine` are the two provider names the first run writes into
+`config.toml`; rename them freely, or copy a section to add more entries. Ids are
+dated snapshots, so override any of them with `--model` or in `config.toml`.
 `--size` takes a tier (`2K`), pixels (`2048x2048`), or `auto` (qwen only); `--n`
 takes 1-6 — on ark each image is a separate paid request. Vendor-specific flags
 (`--negative-prompt` is qwen-only, `--output-format` is ark-only) fail before
@@ -51,7 +61,7 @@ Files are written to `--out-dir` (else `output_dir`, else the current directory)
 prints one absolute path per line on stdout; `--json` prints one object:
 
 ```json
-{"ok":true,"partial":false,"files":[{"path":"/tmp/out/qwen-qwen-image-3-0-20261025-020839-0.png","index":0,"url":"https://dashscope-result.oss-cn-beijing.aliyuncs.com/1.png"}],"errors":[],"usage":{"image_count":1},"request_id":"a1b2c3d4"}
+{"ok":true,"partial":false,"files":[{"path":"/tmp/out/dashscope-qwen-image-3-0-20261025-020839-0.png","index":0,"url":"https://dashscope-result.oss-cn-beijing.aliyuncs.com/1.png"}],"errors":[],"usage":{"image_count":1},"request_id":"a1b2c3d4"}
 ```
 
 `partial: true` with exit `0` means some images were saved and some failed: those
@@ -67,24 +77,40 @@ retried.
 `~/.config/mediagen-cli`.
 
 ```toml
-default_provider = "qwen"
-output_dir = "./media-output"
+default_provider = "dashscope"
+# output_dir = "./media-output"
 
-[providers.qwen]
-base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"   # required for qwen
+[providers.dashscope]
+api_type = "qwen"
+base_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"   # qwen's images API lives on a workspace host
+model = "qwen-image-3.0"
+api_key_env = "DASHSCOPE_API_KEY"
 
-[providers.my-proxy]              # any other provider: api_type + base_url + model
+[providers.volcengine]
 api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com"
+model = "doubao-seedream-5-0-flash-260915"
+api_key_env = "ARK_API_KEY"
+
+[providers.my-proxy]              # a second entry of the same dialect
+api_type = "qwen"
 base_url = "https://proxy.example.com"
-model = "some-model-name"
+model = "qwen-image-3.0"
+# path = "/v1/images/generations"  # optional: override the dialect default
 ```
 
-A key comes from `--api-key`, else the provider's env var (`DASHSCOPE_API_KEY`,
-`ARK_API_KEY`, or its `api_key_env`), else `auth.json`. Keys are only ever printed
-masked. No environment variable sets a `base_url` — for qwen, skipping the step
-above is a `404` whose error message names the command to run. Set
-`NODE_USE_ENV_PROXY=1` on Node >= 24 to honour `HTTP_PROXY`. Timeouts: 300 s per
-request, 120 s per download.
+A provider is one API dialect (`api_type`, either `qwen` or `ark`) plus one concrete
+entry point (`base_url` + `model`). Those three fields are required; `path` and
+`api_key_env` are optional (`path` falls back to the dialect default). The file is
+the only source of truth: nothing is built in, and the first run just writes the
+above into `config.toml` for you to edit.
+
+A key belongs to a provider entry: `--api-key`, else that entry's `api_key_env`,
+else `auth.json`. There is no dialect-level default key variable, so two entries of
+the same dialect can use different keys. Keys are only ever printed masked.
+`base_url` can only be set in the file — for qwen, leaving it alone is a `404`, and
+the error message points at `config.toml`. Set `NODE_USE_ENV_PROXY=1` on Node >= 24
+to honour `HTTP_PROXY`. Timeouts: 300 s per request, 120 s per download.
 
 Working from an agent? `skills/mediagen/SKILL.md` says when to reach for this CLI.
 

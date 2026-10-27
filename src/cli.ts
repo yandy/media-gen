@@ -13,13 +13,22 @@ import {
   resolveApiKey,
   saveApiKey,
   type ApiKeySource,
+  type StoredKeySource,
 } from "./auth.js";
-import { configPath, loadConfig, type MediagenConfig } from "./config.js";
-import { UsageError } from "./errors.js";
+import {
+  configPath,
+  loadConfig,
+  noProviderSelectedMessage,
+  resolveProvider,
+  writeConfigFile,
+  type MediagenConfig,
+  type ProviderOverride,
+} from "./config.js";
+import { ConfigError, UsageError } from "./errors.js";
 import { runGenerate, type GenerateOptions } from "./generate.js";
 import { renderError, renderHuman, renderJson, type RenderedOutput } from "./output.js";
-import { BUILTIN_PROVIDERS, DIALECT_DEFAULT_PATHS } from "./providers.js";
-import type { Dialect, ProviderConfig } from "./types.js";
+import { DIALECT_DEFAULT_PATHS } from "./providers.js";
+import { shellArg, tomlBasicString, tomlKey } from "./toml.js";
 
 /**
  * Everything the CLI needs from the outside world that tests must be able to
@@ -39,7 +48,7 @@ export interface ProgramOptions {
 }
 
 /** Where a configuration value came from, for `config show`. */
-type ValueSource = "built-in" | "config.toml" | "default";
+type ValueSource = "config.toml" | "default";
 
 interface ConfiguredValue {
   value: string;
@@ -48,13 +57,12 @@ interface ConfiguredValue {
 
 interface KeyStatus {
   configured: boolean;
-  source: ApiKeySource | "none";
+  source: StoredKeySource | "none";
   masked_key?: string;
 }
 
 interface ProviderView {
   name: string;
-  custom: boolean;
   api_type?: ConfiguredValue;
   base_url?: ConfiguredValue;
   model?: ConfiguredValue;
@@ -67,7 +75,15 @@ interface ProviderView {
 interface LoginFlags {
   provider?: string;
   apiKey?: string;
+  json?: boolean;
+}
+
+interface ConfigAddFlags {
+  apiType?: string;
   baseUrl?: string;
+  model?: string;
+  path?: string;
+  apiKeyEnv?: string;
   json?: boolean;
 }
 
@@ -102,18 +118,20 @@ const ROOT_HELP = `
 Built for AI agents: explicit flags, no interactive prompts, machine-readable output.
 
 Quickstart:
-  mediagen login --provider qwen --api-key sk-...    # store a key in auth.json
-  mediagen login --provider qwen --base-url https://proxy.example.com  # endpoint only; key from env
-  mediagen image generate "a red fox in fresh snow" --out-dir ./out
+  mediagen config show                                    # first run writes a commented config.toml
+  mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com --model qwen-image-3.0
+  mediagen login --provider my-proxy --api-key sk-...      # store a key in auth.json
+  mediagen image generate "a red fox in fresh snow" --provider my-proxy --out-dir ./out
   mediagen image edit "make the sky sunset orange" --image ./photo.jpg
   mediagen image generate "..." --json               # {"ok":..,"files":[..],"errors":[..]}
 
 Subcommands:
-  login / logout    store or remove an API key, or set a base_url override; provider
+  login / logout    store or remove a provider's API key in auth.json; provider
                     definitions live in config.toml
   auth status       which key each provider would use and where it came from (masked)
-  config show       the resolved configuration, with a source note per value
+  config show       the resolved configuration, with a source note for each value
   config path       where config.toml lives
+  config add        create a provider in config.toml (edit the file for anything else)
 
 Exit codes: 0 success (including a partial success that saved at least one file),
 1 an API/config/runtime failure, 2 a usage error.
@@ -130,41 +148,42 @@ function imageHelpText(command: "generate" | "edit"): string {
   const examples =
     command === "edit"
       ? `  # edit a local file (local paths are read and sent as base64 data URLs)
-  mediagen image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider qwen
+  mediagen image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider dashscope
 
   # combine several references
-  mediagen image edit "put the character from the first image into the scene from the second" --image ./character.png --image ./scene.jpg --provider qwen
+  mediagen image edit "put the character from the first image into the scene from the second" --image ./character.png --image ./scene.jpg --provider dashscope
 
   # ark layer decomposition: one paid request, several files back (base + layers)
-  mediagen image edit "separate the sticker from its background" --image ./sticker.png --provider ark --layer-decomposition true --json
+  mediagen image edit "separate the sticker from its background" --image ./sticker.png --provider volcengine --layer-decomposition true --json
 
   # a third-party proxy declared as [providers.my-proxy] in config.toml
   mediagen image edit "remove the timestamp" --image ./shot.png --provider my-proxy --out-dir ./out`
       : `  # text to image
-  mediagen image generate "a red fox in fresh snow, soft morning light" --provider qwen --size 1024x1024 --out-dir ./out
+  mediagen image generate "a red fox in fresh snow, soft morning light" --provider dashscope --size 1024x1024 --out-dir ./out
 
   # image to image; "mediagen image edit" is the same command with --image required
-  mediagen image generate "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider qwen
+  mediagen image generate "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider dashscope
 
   # several references at once
-  mediagen image generate "the character from the first image wearing the jacket from the second" --image ./character.png --image ./jacket.png --provider qwen
+  mediagen image generate "the character from the first image wearing the jacket from the second" --image ./character.png --image ./jacket.png --provider dashscope
 
   # four ark variants as JSON, for an agent to parse
-  mediagen image generate "minimalist logo for a coffee roastery" --provider ark --model doubao-seedream-5-0-pro --n 4 --seed 42 --json
+  mediagen image generate "minimalist logo for a coffee roastery" --provider volcengine --model doubao-seedream-5-0-pro --n 4 --seed 42 --json
 
   # a third-party proxy declared as [providers.my-proxy] in config.toml
   mediagen image generate "product photo on a white background" --provider my-proxy --out-dir ./shots
 
   # a one-off test against a proxy, without touching config.toml
-  mediagen image generate "colour test card" --provider qwen --base-url https://proxy.example.com --api-key sk-...`;
+  mediagen image generate "colour test card" --provider dashscope --base-url https://proxy.example.com --api-key sk-...`;
 
   return `
 ${intro}
 
-Models (--provider picks the vendor dialect, --model the exact id):
-  qwen-image-3.0              qwen  best text rendering (CJK + Latin) and image editing
-  doubao-seedream-5-0-flash   ark   fastest; use it for drafts and iteration
-  doubao-seedream-5-0-pro     ark   highest quality; slower and more expensive
+Models (--provider picks the endpoint declared in config.toml, --model the exact id):
+  qwen-image-3.0              dashscope   best text rendering (CJK + Latin) and image editing
+  doubao-seedream-5-0-flash   volcengine  fastest; use it for drafts and iteration
+  doubao-seedream-5-0-pro     volcengine  highest quality; slower and more expensive
+  The provider names above are the two the first run writes into config.toml.
   Snapshot ids roll forward, so override any of them with --model or in config.toml.
 
 Sizes (--size, passed through to the vendor; omit it for the vendor default):
@@ -196,7 +215,7 @@ ${examples}`;
 }
 
 const IMAGE_OPTION_HELP = {
-  provider: "provider name: qwen, ark, or a [providers.<name>] from config.toml",
+  provider: "provider name declared in config.toml (default: config default_provider)",
   model: "model id (default: the provider's configured model)",
   image: "reference image, repeatable; local files are sent as data URLs",
   size: "1K|1.5K|2K|3K|4K, WxH pixels, or auto (qwen only)",
@@ -268,10 +287,9 @@ export function createProgram(options: ProgramOptions = {}): Command {
 
   program
     .command("login")
-    .description("Store an API key for a provider in auth.json (mode 600), or set only its base_url")
+    .description("Store an API key for a provider in auth.json (mode 600)")
     .option("--provider <name>", "provider name (default: config default_provider)")
-    .option("--api-key <key>", "the key; omit to be prompted (needs a TTY), or omit with --base-url to change only the endpoint")
-    .option("--base-url <url>", "point this provider's base_url at a URL in config.toml; alone it stores no key")
+    .option("--api-key <key>", "the key; omit to be prompted (needs a TTY)")
     .option("--json", "print a JSON result")
     .action(async (flags: LoginFlags) => {
       await runLogin(flags, deps);
@@ -298,7 +316,7 @@ export function createProgram(options: ProgramOptions = {}): Command {
   const config = program.command("config").description("Inspect the resolved configuration");
   config
     .command("show")
-    .description("Print the effective configuration with a source note per value")
+    .description("Print the effective configuration with a source note for each value")
     .option("--json", "print a JSON result")
     .action(async (flags: { json?: boolean }) => {
       runConfigShow(flags);
@@ -309,6 +327,18 @@ export function createProgram(options: ProgramOptions = {}): Command {
     .option("--json", "print a JSON result")
     .action(async (flags: { json?: boolean }) => {
       runConfigPath(flags);
+    });
+  config
+    .command("add <name>")
+    .description("Create a [providers.<name>] table in config.toml")
+    .option("--api-type <dialect>", "protocol dialect: qwen or ark")
+    .option("--base-url <url>", "the provider's API base URL")
+    .option("--model <id>", "the model id this provider defaults to")
+    .option("--path <path>", "override the dialect's default images path")
+    .option("--api-key-env <VAR>", "environment variable holding this provider's key")
+    .option("--json", "print a JSON result")
+    .action(async (name: string, flags: ConfigAddFlags) => {
+      runConfigAdd(name, flags);
     });
 
   const image = program.command("image").description("Generate and edit images");
@@ -483,99 +513,47 @@ async function runLogin(flags: LoginFlags, deps: CliDeps): Promise<void> {
   const config = loadConfig();
   const name = flags.provider ?? config.default_provider;
   assertKnownProvider(name, config);
-  // Validated before anything is written, so a bad URL cannot leave a half-updated config.
-  const baseUrl = flags.baseUrl === undefined ? undefined : normalizeBaseUrl(flags.baseUrl);
-
-  // `--base-url` on its own is a pure endpoint override: it rewrites config.toml
-  // and must neither read nor store a key, because the third-party-proxy case is
-  // "point the built-in provider elsewhere, the key comes from the environment".
-  if (baseUrl !== undefined && (flags.apiKey?.trim() ?? "") === "") {
-    runBaseUrlOnlyLogin(name, baseUrl, config, flags.json === true);
-    return;
-  }
 
   const key = await resolveLoginKey(name, flags.apiKey, deps);
-  // Rewrite the config before storing the key: a refused rewrite must leave no
-  // half-configured provider with a fresh key attached to it.
-  const configFile = baseUrl === undefined ? undefined : setProviderBaseUrl(name, baseUrl);
   saveApiKey(name, key);
 
   const masked = maskKey(key);
   if (flags.json === true) {
-    const payload: Record<string, unknown> = {
-      ok: true,
-      provider: name,
-      masked_key: masked,
-      auth_file: authPath(),
-    };
-    if (baseUrl !== undefined) payload.base_url = baseUrl;
-    if (configFile !== undefined) payload.config_file = configFile;
-    writeLine(JSON.stringify(payload));
-    return;
-  }
-
-  const lines = [`saved API key ${masked} for provider "${name}" to ${authPath()}`];
-  if (baseUrl !== undefined && configFile !== undefined) {
-    lines.push(`set base_url for provider "${name}" to ${baseUrl} in ${configFile}`);
-  }
-  writeLine(lines.join("\n"));
-}
-
-/**
- * `mediagen login --provider P --base-url U` with no `--api-key`: writes only
- * base_url to config.toml and tells the user where the key has to come from,
- * since nothing was stored and no prompt was shown.
- */
-function runBaseUrlOnlyLogin(
-  name: string,
-  baseUrl: string,
-  config: MediagenConfig,
-  json: boolean,
-): void {
-  const configFile = setProviderBaseUrl(name, baseUrl);
-
-  if (json) {
     writeLine(
       JSON.stringify({
         ok: true,
         provider: name,
-        base_url: baseUrl,
-        config_file: configFile,
-        api_key_stored: false,
+        masked_key: masked,
+        auth_file: authPath(),
       }),
     );
     return;
   }
 
-  writeLine(
-    [
-      `set base_url for provider "${name}" to ${baseUrl} in ${configFile}`,
-      `no API key was stored: ${keyRouteHint(name, config)}`,
-    ].join("\n"),
-  );
-}
-
-/** How provider `name` gets its key now that login stored none. */
-function keyRouteHint(name: string, config: MediagenConfig): string {
-  const keyEnv = envVarFor(buildProbe(name, config.providers[name]));
-  const route =
-    keyEnv === undefined
-      ? `declare api_key_env under [providers.${tomlKey(name)}] in ${configPath()} and set that variable`
-      : `set the ${keyEnv} environment variable`;
-  return `${route}, or run "mediagen login --provider ${name} --api-key ..." to store one`;
+  writeLine(`saved API key ${masked} for provider "${name}" to ${authPath()}`);
 }
 
 /**
- * login stores keys and base_url overrides but never creates a provider: a
- * provider definition (api_type/base_url/model) lives in config.toml, so an
- * unknown name is a usage error that points at the file.
+ * login stores keys but never creates a provider: a provider definition
+ * (api_type/base_url/model) lives in config.toml, so an unknown name is a usage
+ * error that points at the two ways to create one.
  */
 function assertKnownProvider(name: string, config: MediagenConfig): void {
-  if (Object.hasOwn(BUILTIN_PROVIDERS, name) || Object.hasOwn(config.providers, name)) return;
-  throw new UsageError(
-    `unknown provider "${name}": login stores API keys but never creates providers; ` +
-      `add a [providers.${name}] table to ${configPath()} first`,
-  );
+  if (name === "") throw new UsageError(noProviderSelectedMessage());
+  if (!Object.hasOwn(config.providers, name)) {
+    throw new UsageError(
+      `unknown provider "${name}": login stores API keys but never creates providers; ` +
+        `add a [providers.${tomlKey(name)}] table to ${configPath()} first ` +
+        `(or run "mediagen config add ${shellArg(name)} ...")`,
+    );
+  }
+  // A provider that exists but cannot resolve is just as unusable as a missing
+  // one, and storing a key for it would look like success and then fail later.
+  try {
+    resolveProvider(name, config);
+  } catch (error) {
+    throw new UsageError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function resolveLoginKey(
@@ -638,6 +616,7 @@ function readSecretFromTerminal(promptText: string): Promise<string> {
 function runLogout(flags: ProviderFlags): void {
   const config = loadConfig();
   const name = flags.provider ?? config.default_provider;
+  if (name === "") throw new UsageError(noProviderSelectedMessage());
   const removed = removeApiKey(name);
 
   if (flags.json === true) {
@@ -656,19 +635,20 @@ function runAuthStatus(flags: { json?: boolean }): void {
   const entries: (KeyStatus & { name: string })[] = [];
   const details: string[] = [];
 
-  for (const provider of providerProbes(config)) {
-    const resolved = resolveApiKey(provider, undefined, process.env);
+  for (const [name, override] of Object.entries(config.providers)) {
+    const apiKeyEnv = override.api_key_env;
+    const resolved = resolveApiKey({ name, api_key_env: apiKeyEnv }, undefined, process.env);
 
     const entry: KeyStatus & { name: string } = {
-      name: provider.name,
+      name,
       configured: resolved !== null,
       source: resolved?.source ?? "none",
     };
     if (resolved !== null) {
       entry.masked_key = maskKey(resolved.key);
-      details.push(`${entry.masked_key} (${describeKeySource(provider, resolved.source)})`);
+      details.push(`${entry.masked_key} (${describeKeySource(apiKeyEnv, resolved.source)})`);
     } else {
-      details.push(`not configured (${missingKeyHint(provider)})`);
+      details.push(`not configured (${missingKeyHint(name, apiKeyEnv)})`);
     }
     entries.push(entry);
   }
@@ -685,52 +665,18 @@ function runAuthStatus(flags: { json?: boolean }): void {
 }
 
 /**
- * resolveApiKey() only reads `name` and `api_key_env`, so a probe can stand in
- * for a provider whose config.toml entry is incomplete: `auth status` and
- * `config show` must report such a provider instead of failing.
+ * `auth.json` is keyed by provider name, and `resolveApiKey()` needs nothing but
+ * that name and the entry's own `api_key_env`. An incomplete config.toml entry
+ * can therefore still be reported instead of failing the whole command.
  */
-function providerProbes(config: MediagenConfig): ProviderConfig[] {
-  const names = [
-    ...Object.keys(BUILTIN_PROVIDERS),
-    ...Object.keys(config.providers).filter((name) => !Object.hasOwn(BUILTIN_PROVIDERS, name)),
-  ];
-  return names.map((name) => buildProbe(name, config.providers[name]));
-}
-
-function buildProbe(name: string, override?: Partial<ProviderConfig>): ProviderConfig {
-  const builtin = Object.hasOwn(BUILTIN_PROVIDERS, name) ? BUILTIN_PROVIDERS[name] : undefined;
-  const probe: ProviderConfig = {
-    name,
-    api_type: (override?.api_type ?? builtin?.api_type ?? "qwen") as Dialect,
-    base_url: override?.base_url ?? builtin?.base_url ?? "",
-    model: override?.model ?? builtin?.model ?? "",
-    path: override?.path ?? builtin?.path ?? "",
-    custom: builtin === undefined,
-  };
-
-  const keyEnv = override?.api_key_env ?? builtin?.api_key_env;
-  if (keyEnv !== undefined) probe.api_key_env = keyEnv;
-  return probe;
-}
-
-function envVarFor(provider: ProviderConfig): string | undefined {
-  if (provider.api_key_env !== undefined) return provider.api_key_env;
-  const builtin = Object.hasOwn(BUILTIN_PROVIDERS, provider.name)
-    ? BUILTIN_PROVIDERS[provider.name]
-    : undefined;
-  return builtin?.api_key_env;
-}
-
-function describeKeySource(provider: ProviderConfig, source: ApiKeySource): string {
-  if (source === "flag") return "--api-key";
-  if (source === "env") return `env ${envVarFor(provider) ?? "environment variable"}`;
+function describeKeySource(apiKeyEnv: string | undefined, source: StoredKeySource): string {
+  if (source === "env") return `env ${apiKeyEnv ?? "environment variable"}`;
   return `auth.json: ${authPath()}`;
 }
 
-function missingKeyHint(provider: ProviderConfig): string {
-  const hints = [`run "mediagen login --provider ${provider.name}"`];
-  const keyEnv = envVarFor(provider);
-  if (keyEnv !== undefined) hints.push(`set ${keyEnv}`);
+function missingKeyHint(name: string, apiKeyEnv: string | undefined): string {
+  const hints = [`run "mediagen login --provider ${shellArg(name)}"`];
+  if (apiKeyEnv !== undefined) hints.push(`set ${apiKeyEnv}`);
   hints.push("pass --api-key");
   return hints.join(", ");
 }
@@ -743,6 +689,80 @@ function runConfigPath(flags: { json?: boolean }): void {
   writeLine(configPath());
 }
 
+/**
+ * Creates one `[providers.<name>]` table. This is the only place the CLI creates
+ * a provider, and it writes every required field at once: a table that exists but
+ * is missing `base_url` or `model` cannot be produced from the command line.
+ * Anything else — changing a value, removing an entry — is a text edit by hand.
+ */
+function runConfigAdd(name: string, flags: ConfigAddFlags): void {
+  const provider = name.trim();
+  if (provider === "") throw new UsageError("a provider name is required");
+
+  const apiType = parseChoice(flags.apiType, ["qwen", "ark"], "--api-type");
+  if (apiType === undefined) {
+    throw new UsageError('--api-type is required: "qwen" or "ark"');
+  }
+  if (flags.baseUrl === undefined) throw new UsageError("--base-url is required");
+
+  const model = (flags.model ?? "").trim();
+  if (model === "") throw new UsageError("--model is required");
+  // A blank optional field would be written out as an empty string, and an empty
+  // `path` in particular survives `path ?? default` and sends the request to the
+  // bare host, so the field is either sane or absent.
+  const pathOverride = flags.path?.trim();
+  if (flags.path !== undefined && pathOverride === "") {
+    throw new UsageError("--path must not be empty");
+  }
+  const apiKeyEnv = flags.apiKeyEnv?.trim();
+  if (flags.apiKeyEnv !== undefined && apiKeyEnv === "") {
+    throw new UsageError("--api-key-env must not be empty");
+  }
+
+  const file = configPath();
+  // loadConfig() also seeds the file when it is absent, so the append below sees
+  // the same surroundings the user will.
+  const config = loadConfig();
+  if (Object.hasOwn(config.providers, provider)) {
+    // True whether the name is a real entry or a table that already nests one
+    // (`[providers.a.b]`), which appending would also redefine.
+    throw new UsageError(
+      `a [providers.${tomlKey(provider)}] section already exists in ${file}; edit it by hand instead`,
+    );
+  }
+
+  const fields: Record<string, string> = {
+    api_type: apiType,
+    base_url: normalizeBaseUrl(flags.baseUrl),
+    model,
+  };
+  if (pathOverride !== undefined) fields.path = pathOverride;
+  if (apiKeyEnv !== undefined) fields.api_key_env = apiKeyEnv;
+
+  const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  const beforeTable = before.trim() === "" ? undefined : parseToml(before);
+  const after = appendProviderTable(before, provider, fields);
+  assertFaithfulRewrite(beforeTable, after, provider, fields, file);
+  try {
+    writeConfigFile(after);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ConfigError(`cannot write ${file}: ${reason}`);
+  }
+
+  if (flags.json === true) {
+    writeLine(JSON.stringify({ ok: true, provider, config_file: file, fields }));
+    return;
+  }
+
+  const loginHint = `mediagen login --provider ${shellArg(provider)} --api-key ...`;
+  const keyRoute =
+    apiKeyEnv === undefined
+      ? `run "${loginHint}" to store its key`
+      : `set ${shellArg(apiKeyEnv)}, or run "${loginHint}"`;
+  writeLine([`added provider "${provider}" to ${file}`, keyRoute].join("\n"));
+}
+
 function runConfigShow(flags: { json?: boolean }): void {
   const config = loadConfig();
   const file = configPath();
@@ -750,11 +770,15 @@ function runConfigShow(flags: { json?: boolean }): void {
   // loadConfig() above already validated the file, so this parse cannot fail.
   const declared: TomlTable = exists ? parseToml(fs.readFileSync(file, "utf8")) : {};
 
-  const defaultProvider = configuredValue(config.default_provider, declared.default_provider);
+  const defaultProvider = configuredValue(
+    config.default_provider,
+    declared.default_provider,
+  );
   const outputDir = configuredValue(config.output_dir, declared.output_dir);
-  const views = providerProbes(config).map((probe) => ({
-    probe,
-    view: buildProviderView(probe, config),
+  const views = Object.entries(config.providers).map(([name, override]) => ({
+    name,
+    apiKeyEnv: override.api_key_env,
+    view: buildProviderView(name, override),
   }));
 
   if (flags.json === true) {
@@ -770,8 +794,10 @@ function runConfigShow(flags: { json?: boolean }): void {
   }
 
   const lines = [
-    `config file: ${file} (${exists ? "loaded" : "not found; using built-in defaults"})`,
-    `default_provider: ${show(defaultProvider)}`,
+    `config file: ${file} (${exists ? "loaded" : "could not be created"})`,
+    `default_provider: ${
+      defaultProvider.value === "" ? `(not set) (${defaultProvider.source})` : show(defaultProvider)
+    }`,
     `output_dir: ${outputDir.value} (${
       outputDir.source === "default" ? "default: current directory" : outputDir.source
     })`,
@@ -779,12 +805,14 @@ function runConfigShow(flags: { json?: boolean }): void {
     "providers:",
   ];
 
-  for (const { probe, view } of views) {
+  if (views.length === 0) {
     lines.push(
-      `  ${view.name} (${view.custom ? "custom" : "built-in"}, dialect ${
-        view.api_type?.value ?? "unknown"
-      })`,
+      "  (none; run \"mediagen config add <name> --api-type <qwen|ark> --base-url <url> --model <id>\")",
     );
+  }
+
+  for (const { name, apiKeyEnv, view } of views) {
+    lines.push(`  ${view.name} (dialect ${view.api_type?.value ?? "unknown"})`);
     for (const field of ["api_type", "base_url", "model", "path", "api_key_env"] as const) {
       const value = view[field];
       if (value !== undefined) lines.push(`    ${field}: ${show(value)}`);
@@ -794,8 +822,8 @@ function runConfigShow(flags: { json?: boolean }): void {
     }
     lines.push(
       view.api_key.configured && view.api_key.source !== "none"
-        ? `    api_key: ${view.api_key.masked_key} (${describeKeySource(probe, view.api_key.source)})`
-        : `    api_key: not set (${missingKeyHint(probe)})`,
+        ? `    api_key: ${view.api_key.masked_key} (${describeKeySource(apiKeyEnv, view.api_key.source)})`
+        : `    api_key: not set (${missingKeyHint(name, apiKeyEnv)})`,
     );
   }
 
@@ -811,20 +839,12 @@ function configuredValue(value: string, declared: unknown): ConfiguredValue {
   return declared === undefined ? { value, source: "default" } : { value, source: "config.toml" };
 }
 
-function buildProviderView(probe: ProviderConfig, config: MediagenConfig): ProviderView {
-  const override: Partial<ProviderConfig> | undefined = config.providers[probe.name];
-  const builtin = Object.hasOwn(BUILTIN_PROVIDERS, probe.name)
-    ? BUILTIN_PROVIDERS[probe.name]
-    : undefined;
-
+function buildProviderView(name: string, entry: ProviderOverride): ProviderView {
   const field = (
     key: "api_type" | "base_url" | "model" | "path" | "api_key_env",
   ): ConfiguredValue | undefined => {
-    const fromConfig = override?.[key];
-    if (fromConfig !== undefined) return { value: fromConfig, source: "config.toml" };
-    const fromBuiltin = builtin?.[key];
-    if (fromBuiltin !== undefined) return { value: fromBuiltin, source: "built-in" };
-    return undefined;
+    const value = entry[key];
+    return value === undefined ? undefined : { value, source: "config.toml" };
   };
 
   const missing: string[] = [];
@@ -835,9 +855,9 @@ function buildProviderView(probe: ProviderConfig, config: MediagenConfig): Provi
   for (const key of ["api_type", "base_url", "model", "path", "api_key_env"] as const) {
     const value = field(key);
     if (value === undefined) {
-      // api_key_env and path are optional everywhere; the rest are required for
-      // a custom provider, which is what resolveProvider() will complain about.
-      if (key !== "api_key_env" && key !== "path" && builtin === undefined) missing.push(key);
+      // api_key_env and path are optional everywhere; the rest are required, and
+      // missing them is exactly what resolveProvider() will complain about.
+      if (key !== "api_key_env" && key !== "path") missing.push(key);
       continue;
     }
     fields[key] = value;
@@ -851,25 +871,27 @@ function buildProviderView(probe: ProviderConfig, config: MediagenConfig): Provi
   }
 
   const view: ProviderView = {
-    name: probe.name,
-    custom: builtin === undefined,
+    name,
     ...fields,
-    api_key: keyStatus(probe),
+    api_key: keyStatus(name, entry.api_key_env),
   };
   if (missing.length > 0) view.missing = missing;
   return view;
 }
 
-function keyStatus(probe: ProviderConfig): KeyStatus {
-  const resolved = resolveApiKey(probe, undefined, process.env);
+function keyStatus(name: string, apiKeyEnv: string | undefined): KeyStatus {
+  const resolved = resolveApiKey({ name, api_key_env: apiKeyEnv }, undefined, process.env);
   if (resolved === null) return { configured: false, source: "none" };
   return { configured: true, source: resolved.source, masked_key: maskKey(resolved.key) };
 }
 
 function normalizeBaseUrl(value: string): string {
+  // new URL() tolerates surrounding whitespace, so trim first: whatever passes
+  // validation is exactly what gets persisted and concatenated with the path.
+  const trimmed = value.trim();
   let url: URL;
   try {
-    url = new URL(value);
+    url = new URL(trimmed);
   } catch {
     throw new UsageError(
       `invalid --base-url ${JSON.stringify(value)}: expected an absolute http(s) URL`,
@@ -881,134 +903,35 @@ function normalizeBaseUrl(value: string): string {
     );
   }
   // Trailing slashes would double up with the provider path.
-  return value.replace(/\/+$/, "");
+  return trimmed.replace(/\/+$/, "");
+}
+
+/** Appends a complete `[providers.<name>]` table; the caller checked it is absent. */
+function appendProviderTable(text: string, name: string, fields: Record<string, string>): string {
+  const lines = [`[providers.${tomlKey(name)}]`];
+  for (const [key, value] of Object.entries(fields)) {
+    lines.push(`${key} = ${tomlBasicString(value)}`);
+  }
+  const base = text.trim() === "" ? "" : text.endsWith("\n") ? `${text}\n` : `${text}\n\n`;
+  return `${base}${lines.join("\n")}\n`;
 }
 
 /**
- * Sets `base_url` for one provider in config.toml by editing the text in place,
- * so comments, key order and unrelated settings all survive. The rewrite is
- * verified by re-parsing before it touches the file: if anything else changed,
- * the user is told to edit config.toml by hand rather than losing settings.
- */
-function setProviderBaseUrl(name: string, baseUrl: string): string {
-  const file = configPath();
-  const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-  const beforeTable = before.trim() === "" ? undefined : parseToml(before);
-
-  const after = applyBaseUrl(before, name, baseUrl);
-  assertFaithfulRewrite(beforeTable, after, name, baseUrl, file);
-
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(file, after);
-  return file;
-}
-
-function applyBaseUrl(text: string, name: string, baseUrl: string): string {
-  const assignment = `base_url = ${tomlBasicString(baseUrl)}`;
-  const lines = text.split("\n");
-  const header = providerHeaderPattern(name);
-  const headerIndex = lines.findIndex((line) => header.test(line));
-
-  if (headerIndex === -1) {
-    const section = [`[providers.${tomlKey(name)}]`, assignment];
-    if (text.trim() === "") return `${section.join("\n")}\n`;
-    const base = text.endsWith("\n") ? text : `${text}\n`;
-    return `${base}\n${section.join("\n")}\n`;
-  }
-
-  // The section runs up to the next table header, so a stray top-level key
-  // after it is never mistaken for a provider setting.
-  const nextHeader = lines.findIndex(
-    (line, index) => index > headerIndex && /^\s*\[/.test(line),
-  );
-  const end = nextHeader === -1 ? lines.length : nextHeader;
-
-  for (let index = headerIndex + 1; index < end; index += 1) {
-    if (/^\s*base_url\s*=/.test(lines[index])) {
-      lines[index] = replaceAssignment(lines[index], assignment);
-      return lines.join("\n");
-    }
-  }
-
-  lines.splice(headerIndex + 1, 0, assignment);
-  return lines.join("\n");
-}
-
-/** Keeps an inline comment on the line whose value is being replaced. */
-function replaceAssignment(line: string, assignment: string): string {
-  const commentStart = findCommentStart(line);
-  if (commentStart === -1) return assignment;
-  return `${assignment}  ${line.slice(commentStart)}`;
-}
-
-/** Index of a `#` that begins an inline comment: outside a string, preceded by whitespace. */
-function findCommentStart(line: string): number {
-  let quote: string | null = null;
-  let index = 0;
-
-  while (index < line.length) {
-    const char = line[index];
-
-    if (quote !== null) {
-      if (char === "\\") index += 1;
-      else if (char === quote) quote = null;
-    } else if (char === '"' || char === "'") {
-      quote = char;
-    } else if (char === "#" && (index === 0 || /\s/.test(line[index - 1]))) {
-      return index;
-    }
-
-    index += 1;
-  }
-
-  return -1;
-}
-
-function providerHeaderPattern(name: string): RegExp {
-  const forms = [`"${escapeRegex(name)}"`, `'${escapeRegex(name)}'`];
-  if (isBareTomlKey(name)) forms.unshift(escapeRegex(name));
-  return new RegExp(`^\\s*\\[\\s*providers\\s*\\.\\s*(?:${forms.join("|")})\\s*]\\s*(?:#.*)?$`);
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function isBareTomlKey(value: string): boolean {
-  return /^[A-Za-z0-9_-]+$/.test(value);
-}
-
-function tomlKey(name: string): string {
-  return isBareTomlKey(name) ? name : tomlBasicString(name);
-}
-
-function tomlBasicString(value: string): string {
-  const escaped = value
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t");
-  return `"${escaped}"`;
-}
-
-/**
- * Confirms the rewritten TOML still parses, carries the new base_url, and still
- * contains every value the user had. A partial rewrite that silently dropped a
- * setting is worse than no rewrite, so the user is told to edit the file instead.
+ * Confirms the rewritten TOML still parses, carries every field the rewrite
+ * meant to write, and still contains every value the user had. A partial rewrite
+ * that silently dropped a setting is worse than no rewrite, so the user is told
+ * to edit the file instead.
  */
 function assertFaithfulRewrite(
   before: TomlTable | undefined,
   after: string,
   name: string,
-  baseUrl: string,
+  expected: Record<string, string>,
   file: string,
 ): void {
   function fail(): never {
     throw new UsageError(
-      `cannot safely rewrite ${file} to set base_url for provider "${name}"; ` +
-        `edit ${file} by hand and set base_url = ${tomlBasicString(baseUrl)} ` +
-        `under [providers.${tomlKey(name)}]`,
+      `cannot safely rewrite ${file} for provider "${name}"; edit ${file} by hand instead`,
     );
   }
 
@@ -1019,10 +942,12 @@ function assertFaithfulRewrite(
     fail();
   }
 
-  if (tableAt(parsed, ["providers", name])?.base_url !== baseUrl) fail();
-  if (before !== undefined && !isPreserved(before, parsed, ["providers", name, "base_url"])) {
-    fail();
+  const table = tableAt(parsed, ["providers", name]);
+  for (const [key, value] of Object.entries(expected)) {
+    if (table?.[key] !== value) fail();
   }
+  // A brand new provider table is an addition, so nothing needs exempting.
+  if (before !== undefined && !isPreserved(before, parsed, [])) fail();
 }
 
 function tableAt(table: TomlTable, keys: string[]): TomlTable | undefined {

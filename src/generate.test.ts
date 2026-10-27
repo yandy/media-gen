@@ -166,6 +166,33 @@ function writeConfig(toml: string): void {
   fs.writeFileSync(path.join(configHome, "config.toml"), toml);
 }
 
+/**
+ * A complete config.toml declaring the two providers a run needs, with `extra`
+ * (top-level keys only) inserted before the tables. Providers must be declared:
+ * nothing is built in any more.
+ */
+function writeConfigFor(extra: string): void {
+  writeConfig(
+    [
+      'default_provider = "dashscope"',
+      extra,
+      "",
+      "[providers.dashscope]",
+      'api_type = "qwen"',
+      'base_url = "https://dashscope.aliyuncs.com"',
+      'model = "qwen-image-3.0"',
+      'api_key_env = "DASHSCOPE_API_KEY"',
+      "",
+      "[providers.volcengine]",
+      'api_type = "ark"',
+      'base_url = "https://ark.cn-beijing.volces.com"',
+      'model = "doubao-seedream-5-0-flash-260915"',
+      'api_key_env = "ARK_API_KEY"',
+      "",
+    ].join("\n"),
+  );
+}
+
 describe("validateSize", () => {
   const valid: Array<[string, Dialect]> = [
     ["1K", "ark"],
@@ -278,7 +305,7 @@ describe("runGenerate", () => {
     expect(result.response.failures).toEqual([]);
     expect(result.response.usage).toEqual({ total_tokens: 12 });
     expect(result.response.requestId).toBe("req-qwen-1");
-    expect(result.provider.name).toBe("qwen");
+    expect(result.provider.name).toBe("dashscope");
   });
 
   it("carries n in a single qwen request and indexes the saved files sequentially", async () => {
@@ -323,15 +350,15 @@ describe("runGenerate", () => {
     expect(error).toBeInstanceOf(ConfigError);
     expect(error.message).toContain("mediagen login");
     // The hint must be a command that actually runs: login takes --provider.
-    expect(error.message).toContain("mediagen login --provider qwen");
+    expect(error.message).toContain("mediagen login --provider dashscope");
     expect(error.message).not.toContain("mediagen login qwen");
-    expect(error.message).toContain("qwen");
+    expect(error.message).toContain("dashscope");
     expect(error.message).toContain("DASHSCOPE_API_KEY");
     expect(error.message).not.toContain(QWEN_KEY);
     expect(forbidden).not.toHaveBeenCalled();
   });
 
-  it("names the provider in the missing-key error for a custom provider", async () => {
+  it("names the provider in the missing-key error", async () => {
     writeConfig(`
 [providers.my-proxy]
 base_url = "https://proxy.example.com"
@@ -408,7 +435,7 @@ api_key_env = "MY_PROXY_KEY"
 
     const result = await runGenerate(
       "split the layers",
-      options({ provider: "ark", images: ["https://example.com/ref.png"], layerDecomposition: true }),
+      options({ provider: "volcengine", images: ["https://example.com/ref.png"], layerDecomposition: true }),
       ARK_ENV,
     );
 
@@ -438,7 +465,7 @@ api_key_env = "MY_PROXY_KEY"
     const forbidden = stubFetchForbidden();
 
     const error = await rejection(
-      runGenerate("a cat", options({ provider: "ark", negativePrompt: "blurry" }), ARK_ENV),
+      runGenerate("a cat", options({ provider: "volcengine", negativePrompt: "blurry" }), ARK_ENV),
     );
 
     expect(error).toBeInstanceOf(UsageError);
@@ -475,7 +502,7 @@ api_key_env = "MY_PROXY_KEY"
   it("passes a valid --size through unchanged", async () => {
     const stub = stubFetch(() => apiResponse([imageItem("sized")]));
 
-    await runGenerate("a cat", options({ provider: "ark", size: "1728x2160" }), ARK_ENV);
+    await runGenerate("a cat", options({ provider: "volcengine", size: "1728x2160" }), ARK_ENV);
 
     expect(stub.calls[0]?.body).toMatchObject({ size: "1728x2160" });
   });
@@ -497,7 +524,7 @@ api_key_env = "MY_PROXY_KEY"
 
     for (const n of [7, 100, 500]) {
       const error = await rejection(
-        runGenerate("a cat", options({ provider: "ark", n }), ARK_ENV),
+        runGenerate("a cat", options({ provider: "volcengine", n }), ARK_ENV),
       );
       expect(error).toBeInstanceOf(UsageError);
       expect(error.message).toContain("--n");
@@ -541,7 +568,9 @@ api_key_env = "MY_PROXY_KEY"
 
     expect(stub.calls[0]?.url).toBe("https://proxy.example.com/compatible-mode/v1/images/generations");
     expect(result.provider.base_url).toBe("https://proxy.example.com");
-    expect(fs.existsSync(path.join(configHome, "config.toml"))).toBe(false);
+    // Loading may seed config.toml; the one-off --base-url must not be written into it.
+    const written = fs.readFileSync(path.join(configHome, "config.toml"), "utf8");
+    expect(written).not.toMatch(/^base_url = "https:\/\/proxy\.example\.com"$/m);
   });
 
   it("joins a --base-url that carries a trailing slash exactly once", async () => {
@@ -567,7 +596,7 @@ api_key_env = "MY_PROXY_KEY"
   it("prefers --out-dir over the configured output_dir", async () => {
     const fromConfig = path.join(tempDir, "from-config");
     const fromFlag = path.join(tempDir, "from-flag");
-    writeConfig(`output_dir = "${fromConfig}"`);
+    writeConfigFor(`output_dir = "${fromConfig}"`);
     stubFetch(() => apiResponse([imageItem("dir")]));
 
     const result = await runGenerate("a cat", options({ outDir: fromFlag }), QWEN_ENV);
@@ -578,7 +607,7 @@ api_key_env = "MY_PROXY_KEY"
 
   it("falls back to the configured output_dir when --out-dir is absent", async () => {
     const fromConfig = path.join(tempDir, "from-config");
-    writeConfig(`output_dir = "${fromConfig}"`);
+    writeConfigFor(`output_dir = "${fromConfig}"`);
     stubFetch(() => apiResponse([imageItem("dir")]));
 
     const result = await runGenerate("a cat", options({ outDir: undefined }), QWEN_ENV);
@@ -633,7 +662,7 @@ api_key_env = "MY_PROXY_KEY"
 
     const result = await runGenerate(
       "three cats",
-      options({ provider: "ark", n: 3, seed: 100 }),
+      options({ provider: "volcengine", n: 3, seed: 100 }),
       ARK_ENV,
     );
 
@@ -661,7 +690,7 @@ api_key_env = "MY_PROXY_KEY"
   it("omits seed from ark sub-requests when no seed was given", async () => {
     const stub = stubFetch((call, index) => apiResponse([imageItem(`plain-${index}`)]));
 
-    const result = await runGenerate("two cats", options({ provider: "ark", n: 2 }), ARK_ENV);
+    const result = await runGenerate("two cats", options({ provider: "volcengine", n: 2 }), ARK_ENV);
 
     expect(stub.calls).toHaveLength(2);
     for (const call of stub.calls) {
@@ -677,7 +706,7 @@ api_key_env = "MY_PROXY_KEY"
         : apiResponse([imageItem(`ok-${index}`)]),
     );
 
-    const result = await runGenerate("three cats", options({ provider: "ark", n: 3 }), ARK_ENV);
+    const result = await runGenerate("three cats", options({ provider: "volcengine", n: 3 }), ARK_ENV);
 
     expect(stub.calls).toHaveLength(3);
     expect(result.saved.map((file) => file.url)).toEqual([imageUrl("ok-0"), imageUrl("ok-2")]);
@@ -695,7 +724,7 @@ api_key_env = "MY_PROXY_KEY"
         : apiResponse([imageItem(`ok-${index}`)]),
     );
 
-    const result = await runGenerate("two cats", options({ provider: "ark", n: 2 }), ARK_ENV);
+    const result = await runGenerate("two cats", options({ provider: "volcengine", n: 2 }), ARK_ENV);
 
     expect(result.saved.map((file) => file.url)).toEqual([imageUrl("ok-1")]);
     expect(result.response.failures).toHaveLength(1);
@@ -708,12 +737,12 @@ api_key_env = "MY_PROXY_KEY"
     );
 
     const error = await rejection(
-      runGenerate("two cats", options({ provider: "ark", n: 2 }), ARK_ENV),
+      runGenerate("two cats", options({ provider: "volcengine", n: 2 }), ARK_ENV),
     );
 
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).code).toBe("Code0");
-    expect(error.message).toContain("ark");
+    expect(error.message).toContain("volcengine");
     expect(error.message).toContain("blocked 0");
     expect(error.message).toContain("blocked 1");
     // The output directory is created before the request; nothing was written.
@@ -727,7 +756,7 @@ api_key_env = "MY_PROXY_KEY"
         : apiResponse([imageItem("second")], { usage: { total_tokens: 7 }, requestId: "req-1" }),
     );
 
-    const result = await runGenerate("two cats", options({ provider: "ark", n: 2 }), ARK_ENV);
+    const result = await runGenerate("two cats", options({ provider: "volcengine", n: 2 }), ARK_ENV);
 
     expect(result.response.usage).toEqual({ total_tokens: 7 });
     expect(result.response.requestId).toBe("req-1");
@@ -762,7 +791,7 @@ api_key_env = "MY_PROXY_KEY"
 
     const result = await runGenerate(
       "split the layers",
-      options({ provider: "ark", images: ["https://example.com/ref.png"], layerDecomposition: true }),
+      options({ provider: "volcengine", images: ["https://example.com/ref.png"], layerDecomposition: true }),
       ARK_ENV,
     );
 
@@ -801,9 +830,9 @@ api_key_env = "MY_PROXY_KEY"
     );
     expect(stamps.size).toBe(1);
     expect(result.saved.map((file) => path.basename(file.path))).toEqual([
-      expect.stringMatching(/^qwen-qwen-image-3-0-\d{8}-\d{6}-0\.png$/),
-      expect.stringMatching(/^qwen-qwen-image-3-0-\d{8}-\d{6}-1\.png$/),
-      expect.stringMatching(/^qwen-qwen-image-3-0-\d{8}-\d{6}-2\.png$/),
+      expect.stringMatching(/^dashscope-qwen-image-3-0-\d{8}-\d{6}-0\.png$/),
+      expect.stringMatching(/^dashscope-qwen-image-3-0-\d{8}-\d{6}-1\.png$/),
+      expect.stringMatching(/^dashscope-qwen-image-3-0-\d{8}-\d{6}-2\.png$/),
     ]);
   });
 
@@ -901,7 +930,7 @@ api_key_env = "MY_PROXY_KEY"
       const result = await runGenerate(
         "split the layers",
         options({
-          provider: "ark",
+          provider: "volcengine",
           images: ["https://example.com/ref.png"],
           layerDecomposition: true,
         }),
@@ -929,7 +958,7 @@ api_key_env = "MY_PROXY_KEY"
         runGenerate(
           "split the layers",
           options({
-            provider: "ark",
+            provider: "volcengine",
             images: ["https://example.com/ref.png"],
             layerDecomposition: true,
           }),
@@ -951,7 +980,7 @@ api_key_env = "MY_PROXY_KEY"
           : apiResponse([imageItem("ok")]),
       );
 
-      const result = await runGenerate("two cats", options({ provider: "ark", n: 2 }), ARK_ENV);
+      const result = await runGenerate("two cats", options({ provider: "volcengine", n: 2 }), ARK_ENV);
 
       expect(stub.calls).toHaveLength(2);
       expect(result.saved).toHaveLength(1);

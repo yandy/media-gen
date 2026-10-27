@@ -24,7 +24,7 @@ function writeConfig(toml: string): void {
 }
 
 function emptyConfig(): MediagenConfig {
-  return { default_provider: "qwen", output_dir: process.cwd(), providers: {} };
+  return { default_provider: "dashscope", output_dir: process.cwd(), providers: {} };
 }
 
 function thrownBy(action: () => unknown): Error {
@@ -78,22 +78,37 @@ describe("configDir", () => {
 });
 
 describe("loadConfig", () => {
-  it("returns the documented defaults when the config file is missing", () => {
+  it("writes the seed config on first load and reads it back", () => {
     expect(fs.existsSync(configPath())).toBe(false);
 
-    expect(loadConfig()).toEqual({
-      default_provider: "qwen",
-      output_dir: process.cwd(),
-      providers: {},
+    const config = loadConfig();
+
+    expect(fs.existsSync(configPath())).toBe(true);
+    expect(config.default_provider).toBe("dashscope");
+    expect(Object.keys(config.providers).sort()).toEqual(["dashscope", "volcengine"]);
+    expect(config.providers.dashscope).toEqual({
+      api_type: "qwen",
+      base_url: "https://dashscope.aliyuncs.com",
+      model: "qwen-image-3.0",
+      api_key_env: "DASHSCOPE_API_KEY",
     });
   });
 
-  it("parses provider overrides and keeps default_provider at qwen", () => {
+  it("never overwrites an existing config.toml", () => {
+    writeConfig('default_provider = "mine"\n[providers.mine]\n');
+
+    expect(loadConfig().default_provider).toBe("mine");
+    expect(fs.readFileSync(configPath(), "utf8")).toBe(
+      'default_provider = "mine"\n[providers.mine]\n',
+    );
+  });
+
+  it("leaves default_provider empty when config.toml does not set it", () => {
     writeConfig('[providers.qwen]\nbase_url = "https://x"\n');
 
     const config = loadConfig();
 
-    expect(config.default_provider).toBe("qwen");
+    expect(config.default_provider).toBe("");
     expect(config.providers.qwen.base_url).toBe("https://x");
     expect(config.providers.qwen.model).toBeUndefined();
   });
@@ -168,46 +183,21 @@ describe("loadConfig", () => {
   });
 });
 
+describe("ensureConfigFile", () => {
+  it("still returns a usable config when the seed cannot be written", () => {
+    const blocker = path.join(tempDir, "blocker");
+    fs.writeFileSync(blocker, "");
+    process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(blocker, "config");
+
+    const config = loadConfig();
+
+    expect(config.providers).toEqual({});
+    expect(fs.existsSync(configPath())).toBe(false);
+  });
+});
+
 describe("resolveProvider", () => {
-  it("returns the built-in qwen provider verbatim", () => {
-    expect(resolveProvider("qwen", emptyConfig())).toEqual({
-      name: "qwen",
-      api_type: "qwen",
-      base_url: "https://dashscope.aliyuncs.com",
-      model: "qwen-image-3.0",
-      path: "/compatible-mode/v1/images/generations",
-      api_key_env: "DASHSCOPE_API_KEY",
-      custom: false,
-    });
-  });
-
-  it("returns the built-in ark provider verbatim", () => {
-    expect(resolveProvider("ark", emptyConfig())).toEqual({
-      name: "ark",
-      api_type: "ark",
-      base_url: "https://ark.cn-beijing.volces.com",
-      model: "doubao-seedream-5-0-flash-260915",
-      path: "/api/v3/images/generations",
-      api_key_env: "ARK_API_KEY",
-      custom: false,
-    });
-  });
-
-  it("merges a base_url override over the built-in defaults", () => {
-    writeConfig('[providers.qwen]\nbase_url = "https://mirror.example.com"\n');
-
-    expect(resolveProvider("qwen", loadConfig())).toEqual({
-      name: "qwen",
-      api_type: "qwen",
-      base_url: "https://mirror.example.com",
-      model: "qwen-image-3.0",
-      path: "/compatible-mode/v1/images/generations",
-      api_key_env: "DASHSCOPE_API_KEY",
-      custom: false,
-    });
-  });
-
-  it("resolves a custom provider with the dialect default path", () => {
+  it("resolves a provider declared in config.toml and fills the dialect path", () => {
     writeConfig(
       '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\nmodel = "some-model"\n',
     );
@@ -218,11 +208,29 @@ describe("resolveProvider", () => {
       base_url: "https://proxy.example.com",
       model: "some-model",
       path: "/api/v3/images/generations",
-      custom: true,
     });
   });
 
-  it("lets config override the path of a custom provider", () => {
+  it("throws ConfigError naming the file when a provider omits api_type", () => {
+    writeConfig('[providers.qwen]\nbase_url = "https://x"\nmodel = "m"\n');
+
+    const error = thrownBy(() => resolveProvider("qwen", loadConfig()));
+
+    expect(error).toBeInstanceOf(ConfigError);
+    expect(error.message).toContain("api_type");
+    expect(error.message).toContain("config.toml");
+  });
+
+  it("throws ConfigError when default_provider is empty", () => {
+    writeConfig("");
+
+    const error = thrownBy(() => resolveProvider("", loadConfig()));
+
+    expect(error).toBeInstanceOf(ConfigError);
+    expect(error.message).toContain("default_provider");
+  });
+
+  it("lets config override the path of a provider", () => {
     writeConfig(
       '[providers.my-proxy]\napi_type = "ark"\nbase_url = "https://proxy.example.com"\nmodel = "some-model"\npath = "/custom/images"\n',
     );
@@ -230,7 +238,7 @@ describe("resolveProvider", () => {
     expect(resolveProvider("my-proxy", loadConfig()).path).toBe("/custom/images");
   });
 
-  it("throws ConfigError naming api_type when a custom provider omits it", () => {
+  it("throws ConfigError naming api_type when a provider omits it", () => {
     writeConfig(
       '[providers.my-proxy]\nbase_url = "https://proxy.example.com"\nmodel = "some-model"\n',
     );
@@ -241,7 +249,7 @@ describe("resolveProvider", () => {
     expect(error.message).toContain("api_type");
   });
 
-  it("names every missing field for an incomplete custom provider", () => {
+  it("names every missing field for an incomplete provider", () => {
     writeConfig("[providers.my-proxy]\n");
 
     const error = thrownBy(() => resolveProvider("my-proxy", loadConfig()));
@@ -252,11 +260,11 @@ describe("resolveProvider", () => {
     expect(error.message).toContain("model");
   });
 
-  it("throws ConfigError with login guidance for an unknown provider", () => {
+  it("throws ConfigError pointing at config.toml for an unknown provider", () => {
     const error = thrownBy(() => resolveProvider("nope", emptyConfig()));
 
     expect(error).toBeInstanceOf(ConfigError);
-    expect(error.message).toContain("mediagen login");
+    expect(error.message).toContain("config add");
     expect(error.message).toContain("config.toml");
   });
 });
