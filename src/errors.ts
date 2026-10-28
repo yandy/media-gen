@@ -19,6 +19,11 @@ export class UsageError extends Error {
  * a request that timed out. Zero, because no HTTP response carries it, and it is a
  * number so a retry policy can decide by reading one field for every failure it
  * sees rather than by matching message text.
+ *
+ * It reports the *absence of a response* and nothing else — in particular it never
+ * says that resending is safe. A `GET` poll that carries it is worth another try;
+ * a `POST` create that timed out carries it too, and that request may already have
+ * been accepted and paid for, so a create must never be resent because of it.
  */
 export const NO_RESPONSE_STATUS = 0;
 

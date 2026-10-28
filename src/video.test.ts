@@ -37,6 +37,29 @@ const originalEnv = {
 let tempDir: string;
 let outDir: string;
 
+/**
+ * The config every test boots with. `videoTimeoutSeconds` overrides the video poll
+ * budget (`timeout_seconds`), which is how a test gets a budget so small that the
+ * first poll is also the last.
+ */
+function configText(videoTimeoutSeconds?: number): string {
+  return [
+    'default_provider = "volcengine"',
+    `output_dir = ${JSON.stringify(outDir)}`,
+    "",
+    "[providers.volcengine]",
+    'api_type = "ark"',
+    'base_url = "https://ark.cn-beijing.volces.com"',
+    'api_key_env = "ARK_API_KEY"',
+    "",
+    "[providers.volcengine.video]",
+    'default = "doubao-seedance-2-5-260628"',
+    'models = ["doubao-seedance-2-5-260628"]',
+    ...(videoTimeoutSeconds === undefined ? [] : [`timeout_seconds = ${videoTimeoutSeconds}`]),
+    "",
+  ].join("\n");
+}
+
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-video-"));
   outDir = path.join(tempDir, "out");
@@ -45,22 +68,7 @@ beforeEach(() => {
   process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(tempDir, "config");
   process.env.MEDIAGEN_CLI_STATE_DIR = path.join(tempDir, "state");
   process.env.ARK_API_KEY = ARK_KEY;
-  writeConfigFile(
-    [
-      'default_provider = "volcengine"',
-      `output_dir = ${JSON.stringify(outDir)}`,
-      "",
-      "[providers.volcengine]",
-      'api_type = "ark"',
-      'base_url = "https://ark.cn-beijing.volces.com"',
-      'api_key_env = "ARK_API_KEY"',
-      "",
-      "[providers.volcengine.video]",
-      'default = "doubao-seedance-2-5-260628"',
-      'models = ["doubao-seedance-2-5-260628"]',
-      "",
-    ].join("\n"),
-  );
+  writeConfigFile(configText());
 });
 
 afterEach(() => {
@@ -96,28 +104,53 @@ interface ScriptedCall { url: string; method: string; headers: Record<string, st
 /**
  * The Nth call gets the Nth response; the last one repeats once it runs out.
  * `notes` collects everything written to stderr, which is where the task-id note
- * must go so stdout stays result-only.
+ * must go so stdout stays result-only. `timeline` interleaves those writes with the
+ * requests in the order they happened — the only way to assert *when* the note was
+ * written rather than only what it said.
  */
-function scriptedFetch(responses: Response[]): { calls: ScriptedCall[]; notes: string[] } {
+function scriptedFetch(responses: Response[]): {
+  calls: ScriptedCall[];
+  notes: string[];
+  timeline: string[];
+} {
   const calls: ScriptedCall[] = [];
   const notes: string[] = [];
+  const timeline: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? "GET";
     calls.push({
-      url, method: init?.method ?? "GET",
+      url, method,
       headers: (init?.headers ?? {}) as Record<string, string>,
       ...(init?.body === undefined ? {} : { body: JSON.parse(String(init.body)) as Record<string, unknown> }),
     });
+    timeline.push(`${method} ${url}`);
     return responses[Math.min(calls.length - 1, responses.length - 1)];
   }));
-  vi.spyOn(process.stderr, "write").mockImplementation((chunk) => { notes.push(String(chunk)); return true; });
-  return { calls, notes };
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    const text = String(chunk);
+    notes.push(text);
+    timeline.push(`stderr ${text.trim()}`);
+    return true;
+  });
+  return { calls, notes, timeline };
 }
 
-/** No sleeping plus a fake clock; `step` is how far each `now()` advances (default 0: never over budget). */
-function deps(options: { step?: number } = {}): VideoDeps {
+/**
+ * No sleeping plus a fake clock; `step` is how far each `now()` advances (default 0:
+ * never over budget). `sleeps` records every wait the loop asked for, which is the
+ * only way to pin the poll schedule without a real clock.
+ */
+function deps(options: { step?: number } = {}): VideoDeps & { sleeps: number[] } {
   let clock = 0;
   const step = options.step ?? 0;
-  return { sleep: async () => {}, now: () => (clock += step) };
+  const sleeps: number[] = [];
+  return {
+    sleeps,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+    now: () => (clock += step),
+  };
 }
 
 describe("validateResolution", () => {
@@ -250,10 +283,37 @@ describe("runVideoGenerate", () => {
     await runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps());
     expect(stub.notes[0]).toContain("cgt-1");
     expect(stub.notes[0]).toMatch(/resume with/);
+    // Content alone would pass for a note written after the last poll: the timeline
+    // pins the order — create, note, first poll.
+    expect(stub.timeline[0]).toMatch(/^POST /);
+    expect(stub.timeline[1]).toMatch(/^stderr note: task cgt-1 was created/);
+    expect(stub.timeline[2]).toMatch(/^GET /);
+    const noteAt = stub.timeline.findIndex((entry) => entry.startsWith("stderr "));
+    const firstPollAt = stub.timeline.findIndex((entry) => entry.startsWith("GET "));
+    expect(noteAt).toBeLessThan(firstPollAt);
+  });
+
+  it("waits on the poll schedule: 2s, then x1.5, capped at 10s", async () => {
+    const stub = scriptedFetch([
+      jsonResponse({ id: "cgt-1" }),
+      jsonResponse({ status: "queued" }),
+      jsonResponse({ status: "running" }),
+      jsonResponse({ status: "running" }),
+      jsonResponse({ status: "running" }),
+      jsonResponse({ status: "running" }),
+      jsonResponse({ status: "succeeded", content: { video_url: "https://cdn/v.mp4" } }),
+      videoBytes(),
+    ]);
+    const clock = deps();
+    await runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, clock);
+    // One wait before each of the six polls; the cap is what keeps a long queue from
+    // spending its budget on requests.
+    expect(clock.sleeps).toEqual([2_000, 3_000, 4_500, 6_750, 10_000, 10_000]);
+    expect(stub.calls.filter((c) => c.method === "GET" && c.url.startsWith(ARK_VIDEO_URL))).toHaveLength(6);
   });
 
   it("stops when the budget is spent and reports it as paid-but-unfinished", async () => {
-    // The clock jumps 16 minutes per now(): the second iteration is past the 1800s budget.
+    // The clock jumps 16 minutes per now(): the second poll's budget check is past the 1800s budget.
     const stub = scriptedFetch([
       jsonResponse({ id: "cgt-1" }),
       jsonResponse({ status: "running" }),
@@ -268,6 +328,27 @@ describe("runVideoGenerate", () => {
     expect(stub.calls.filter((c) => c.method === "POST")).toHaveLength(1);
   });
 
+  it("polls once even when the whole budget is one second", async () => {
+    // timeout_seconds = 1 is legal and the first wait comes before the first poll,
+    // so without this the run would pay for a task and never ask its state.
+    writeConfigFile(configText(1));
+    const stub = scriptedFetch([
+      jsonResponse({ id: "cgt-1" }),
+      jsonResponse({ status: "running" }),
+    ]);
+    const error = await rejection(
+      runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps({ step: 1_000 })),
+    );
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe("TaskNotFinished");
+    expect((error as ApiError).taskId).toBe("cgt-1");
+    expect(error.message).toContain("cgt-1");
+    // Exactly one poll: the budget may end the run, but only after the state was asked.
+    expect(stub.calls).toHaveLength(2);
+    expect(stub.calls.filter((c) => c.method === "GET")).toHaveLength(1);
+    expect(stub.calls.filter((c) => c.method === "POST")).toHaveLength(1);
+  });
+
   it("does not poll at all with --no-wait", async () => {
     const stub = scriptedFetch([jsonResponse({ id: "cgt-1" })]);
     const result = await runVideoGenerate("a cat", { provider: "volcengine", noWait: true }, deps());
@@ -277,19 +358,37 @@ describe("runVideoGenerate", () => {
   });
 
   it.each(["failed", "cancelled", "expired"])("reports %s as an error", async (status) => {
-    scriptedFetch([jsonResponse({ id: "cgt-1" }), jsonResponse({ status, error: { code: "X", message: "nope" } })]);
+    const stub = scriptedFetch([
+      jsonResponse({ id: "cgt-1" }),
+      jsonResponse({ status, error: { code: "X", message: "nope" } }),
+    ]);
     const error = await rejection(runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps()));
     expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).taskId).toBe("cgt-1");
+    expect((error as ApiError).code).toBe("X");
+    // The vendor's own line is the only thing that says why, so it has to survive.
+    expect(error.message).toContain("nope");
+    expect(error.message).toContain(status);
+    expect(error.message).toContain("cgt-1");
+    expect(stub.calls).toHaveLength(2);   // create + the one poll that ended the task
+    expect(stub.calls.filter((c) => c.method === "POST")).toHaveLength(1);
   });
 
   it("retries a transient 5xx while polling, then gives up after five in a row", async () => {
-    scriptedFetch([jsonResponse({ id: "cgt-1" }), ...Array.from({ length: 5 }, () => new Response("", { status: 502 }))]);
+    const stub = scriptedFetch([jsonResponse({ id: "cgt-1" }), ...Array.from({ length: 5 }, () => new Response("", { status: 502 }))]);
     const error = await rejection(runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps()));
     expect(error).toBeInstanceOf(ApiError);
     expect(error.message).toMatch(/502/);
     // Giving up on the polls says nothing about the task: it is paid for, so the
-    // error still has to name it.
+    // error still has to name it and say how to resume it.
     expect((error as ApiError).taskId).toBe("cgt-1");
+    expect(error.message).toContain("cgt-1");
+    expect(error.message).toMatch(/video status cgt-1/);
+    expect((error as ApiError).code).toBe("PollFailed");
+    // The counter reached exactly five: create + five polls, and no sixth.
+    expect(stub.calls).toHaveLength(6);
+    expect(stub.calls.filter((c) => c.method === "GET")).toHaveLength(5);
+    expect(error.message).toMatch(/5 failures in a row/);
   });
 
   it("does not retry a 401 while polling", async () => {
@@ -303,6 +402,27 @@ describe("runVideoGenerate", () => {
     const error = await rejection(runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps()));
     expect(error.message).toMatch(/paused/);
     expect(stub.calls).toHaveLength(2);
+    // The state is unknown but the task is paid for: the wrapped error carries the id
+    // and the resume hint instead of leaving the id 30 minutes of scrollback behind.
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).taskId).toBe("cgt-1");
+    expect(error.message).toMatch(/video status cgt-1/);
+  });
+
+  it("keeps the task id on a poll whose 200 body will not parse", async () => {
+    // A proxy's HTML page served as 200 is terminal, and it says nothing about a task
+    // that is paid for and still running.
+    const stub = scriptedFetch([
+      jsonResponse({ id: "cgt-1" }),
+      new Response("<html>not json</html>", { status: 200, headers: { "content-type": "text/html" } }),
+    ]);
+    const error = await rejection(runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps()));
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).taskId).toBe("cgt-1");
+    expect(error.message).toContain("cgt-1");
+    expect(error.message).toMatch(/video status cgt-1/);
+    expect(stub.calls).toHaveLength(2);
+    expect(stub.calls.filter((c) => c.method === "POST")).toHaveLength(1);
   });
 
   it("sends the create to --base-url's origin when one is given", async () => {

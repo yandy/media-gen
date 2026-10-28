@@ -509,6 +509,30 @@ export async function createTask(
 }
 
 /**
+ * Redacts the vendor's failure text of one poll. This is the one place that both
+ * holds the key and sees that text: the pipeline copies `failure.message` and
+ * `failure.code` into an `ApiError`, and `ApiError.code` is published into the JSON
+ * envelope, which can land on disk. A `2xx` poll body never reaches `errorForStatus`,
+ * so without this a proxy that reflects the request headers would leak the key
+ * through a task's own failure line.
+ */
+function redactedOutcome(outcome: TaskOutcome, redact: (text: string) => string): TaskOutcome {
+  switch (outcome.state) {
+    case "failed":
+    case "cancelled":
+    case "expired": {
+      const failure: { code?: string; message: string } = {
+        message: redact(outcome.failure.message),
+      };
+      if (outcome.failure.code !== undefined) failure.code = redact(outcome.failure.code);
+      return { state: outcome.state, failure };
+    }
+    default:
+      return outcome;
+  }
+}
+
+/**
  * Reads one poll. The path comes from the adapter, never from a suffix rule: a
  * dialect's poll prefix can differ from its create path. A task's own `path`
  * covers both verbs, because it describes a host's layout, not one endpoint.
@@ -533,6 +557,6 @@ export async function pollTask(
     notFoundMessage: unknownTaskMessage(provider, taskId, hostOf(url)),
   });
 
-  const outcome = adapter.pollOutcome(json);
+  const outcome = redactedOutcome(adapter.pollOutcome(json), redactorFor(apiKey));
   return requestId === undefined ? outcome : { ...outcome, requestId };
 }

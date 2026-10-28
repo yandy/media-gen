@@ -985,6 +985,28 @@ describe("pollTask: one poll, read by the adapter", () => {
     expect(error.message.length).toBeLessThan(500);
   });
 
+  it("redacts the API key out of a terminal task's vendor error text", async () => {
+    // A 2xx poll never reaches errorForStatus, so this is the only path where the
+    // vendor's failure line could carry a reflected key into an ApiError whose code
+    // is published into the JSON envelope on disk.
+    stubVideoFetch(
+      jsonResponse({
+        status: "failed",
+        error: { code: `InvalidApiKey.${API_KEY}`, message: `bad key ${API_KEY}` },
+      }),
+    );
+
+    const outcome = await pollTask({ binding: arkBinding(), apiKey: API_KEY, taskId: "cgt-1" });
+
+    expect(outcome.state).toBe("failed");
+    if (outcome.state !== "failed") throw new Error(`expected a failed outcome, got ${outcome.state}`);
+    expect(outcome.failure.message).not.toContain(API_KEY);
+    expect(outcome.failure.message).toContain("[redacted]");
+    expect(outcome.failure.code ?? "").not.toContain(API_KEY);
+    expect(outcome.failure.code ?? "").toContain("[redacted]");
+    expect(JSON.stringify(outcome)).not.toContain(API_KEY);
+  });
+
   it("uses the plain timeout wording for a poll, which is not paid for", async () => {
     stubVideoFetch(timeoutRejection());
 

@@ -317,7 +317,9 @@ export async function runVideoGenerate(
     response: media,
   };
   if (media.usage !== undefined) result.usage = media.usage;
-  const requestId = waited.requestId ?? created.requestId;
+  // The create's id wins: that is the request which was charged, and the image path
+  // likewise keeps the first id it sees.
+  const requestId = created.requestId ?? waited.requestId;
   if (requestId !== undefined) result.requestId = requestId;
   return result;
 }
@@ -347,6 +349,12 @@ interface WaitedTask {
  * (that lives in `pollTask`) and not the download's. A transient poll failure is
  * retried on the same backoff curve as a wait — a GET costs nothing, so it is the
  * create that may never be retried.
+ *
+ * The budget is checked only *after* a poll, never before the first one:
+ * `timeout_seconds` may legally be 1, and a run that created and paid for a task
+ * without ever asking its state would report "unfinished" about a task nobody
+ * queried. A budget that expires right after that first poll still reports
+ * `TaskNotFinished`, now backed by a state the vendor really answered.
  */
 async function waitForTask(
   binding: TaskBinding,
@@ -360,17 +368,15 @@ async function waitForTask(
 
   for (;;) {
     await deps.sleep(delay);
-    // Checked before the poll, so an exhausted budget spends no request and is
-    // reported as "unfinished", never as a failed task.
-    if (deps.now() >= deadline) throw notFinishedError(binding, taskId);
 
     let polled: TaskOutcome & { requestId?: string };
     try {
       polled = await pollTask({ binding, apiKey, taskId });
     } catch (error) {
-      if (!isTransientPollFailure(error)) throw error;
+      if (!isTransientPollFailure(error)) throw stoppedPollingError(taskId, error);
       failures += 1;
       if (failures >= POLL_MAX_CONSECUTIVE_FAILURES) throw gaveUpPollingError(binding, taskId, error);
+      if (deps.now() >= deadline) throw notFinishedError(binding, taskId);
       delay = nextDelay(delay);
       continue;
     }
@@ -385,11 +391,13 @@ async function waitForTask(
           : { result: outcome.result, requestId: polled.requestId };
       case "pending":
       case "running":
-        delay = nextDelay(delay);
-        continue;
+        break;
       default:
         throw taskEndedError(binding, taskId, outcome);
     }
+
+    if (deps.now() >= deadline) throw notFinishedError(binding, taskId);
+    delay = nextDelay(delay);
   }
 }
 
@@ -411,9 +419,10 @@ function isTransientPollFailure(error: unknown): boolean {
 }
 
 /**
- * The one sentence that stops a run from paying twice. Both errors that end polling
- * without knowing the task's state end with it, because the task behind them is
- * already created and charged.
+ * The one sentence that stops a run from paying twice. Every error that ends polling
+ * without knowing the task's state — the budget, five failures in a row, a failure
+ * not worth retrying — ends with it, because the task behind them is already created
+ * and charged.
  */
 function resumeHint(id: string): string {
   return (
@@ -440,16 +449,35 @@ function notFinishedError(binding: TaskBinding, taskId: string): ApiError {
 
 /**
  * Polling stopped because the polls kept failing, which says nothing about the task:
- * it may well be running. The reason is kept verbatim — it names the status that
- * kept failing — and the id travels along for the same reason as above.
+ * it may well be running. The reason is kept — it names the status that kept failing,
+ * bounded and sanitized by `safeLine` like every other echoed string — and the id
+ * travels along for the same reason as above.
  */
 function gaveUpPollingError(binding: TaskBinding, taskId: string, cause: unknown): ApiError {
   const id = safeLine(taskId);
-  const reason = cause instanceof Error ? cause.message : String(cause);
+  const reason = safeLine(cause instanceof Error ? cause.message : String(cause));
   const code = cause instanceof ApiError && cause.code !== undefined ? cause.code : "PollFailed";
   return new ApiError(
     `polling task ${id} gave up after ${POLL_MAX_CONSECUTIVE_FAILURES} failures in a row: ` +
       `${reason}. ${resumeHint(id)}`,
+    code,
+    taskId,
+  );
+}
+
+/**
+ * Polling stopped on a failure that is not worth another try, which says nothing
+ * about the task: the adapter refused a status nobody anticipated, or a proxy served
+ * a body that is not JSON as a `200`. The task is paid for and may still be running,
+ * so the failure's own line survives and the id and the resume hint travel with it —
+ * rethrowing it bare left the id behind, 30 minutes of scrollback above the report.
+ */
+function stoppedPollingError(taskId: string, cause: unknown): ApiError {
+  const id = safeLine(taskId);
+  const reason = safeLine(cause instanceof Error ? cause.message : String(cause));
+  const code = cause instanceof ApiError && cause.code !== undefined ? cause.code : "PollFailed";
+  return new ApiError(
+    `polling task ${id} stopped before its state was known: ${reason}. ${resumeHint(id)}`,
     code,
     taskId,
   );
@@ -492,7 +520,7 @@ async function saveVideo(
       index: 0,
     });
   } catch (error) {
-    const cause = error instanceof Error ? error.message : String(error);
+    const cause = safeLine(error instanceof Error ? error.message : String(error));
     const id = safeLine(params.taskId);
     const code = error instanceof ApiError && error.code !== undefined ? error.code : "DownloadError";
     throw new ApiError(
