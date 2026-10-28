@@ -9,6 +9,8 @@ import type {
   ProviderConfig,
   TaskAdapter,
   TaskBinding,
+  TaskOutcome,
+  VideoRequest,
 } from "./types.js";
 
 /** Error bodies are vendor/proxy output of unknown size; keep messages readable. */
@@ -22,6 +24,13 @@ const BODY_EXCERPT_LIMIT = 200;
  * dialect's path carries the version segment (`/compatible-mode/v1/...`).
  */
 const QWEN_WORKSPACE_BASE_URL = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com";
+
+/**
+ * How long one create or one poll request may take. Deliberately not
+ * `binding.timeout_ms`: that value is the whole poll budget (default 1800s), and
+ * one hung request must not be able to consume it.
+ */
+export const REQUEST_TIMEOUT_MS = 60_000;
 
 export interface CallApiParams {
   /** The resolved provider, task, model and timeout this request runs under. */
@@ -62,20 +71,26 @@ const ANSI_ESCAPE_SEQUENCE =
 const CONTROL_BYTE = /[\u0000-\u001f\u007f-\u009f]/g;
 
 /**
- * Collapses whitespace, strips escape and control bytes, and caps the length so
- * an HTML error page or a wall of JSON cannot flood the terminal or an agent's
- * context window.
+ * Collapses whitespace and strips escape and control bytes. Every string this
+ * module echoes — a response body, a task id the user typed — goes through it,
+ * so nothing untrusted can drive the terminal.
  */
-function bodyExcerpt(text: string): string {
-  const oneLine = text
+function oneLine(text: string): string {
+  return text
     .replace(ANSI_ESCAPE_SEQUENCE, "")
     .replace(CONTROL_BYTE, " ")
     .replace(/\s+/g, " ")
     .trim();
-  if (oneLine === "") return "empty body";
-  return oneLine.length > BODY_EXCERPT_LIMIT
-    ? `${oneLine.slice(0, BODY_EXCERPT_LIMIT)}...`
-    : oneLine;
+}
+
+/**
+ * Caps the length so an HTML error page or a wall of JSON cannot flood the
+ * terminal or an agent's context window.
+ */
+function bodyExcerpt(text: string): string {
+  const line = oneLine(text);
+  if (line === "") return "empty body";
+  return line.length > BODY_EXCERPT_LIMIT ? `${line.slice(0, BODY_EXCERPT_LIMIT)}...` : line;
 }
 
 /** Extracts the host for error messages without requiring a well-formed URL. */
@@ -157,7 +172,7 @@ function errorForStatus(
   status: number,
   provider: ProviderConfig,
   dialect: Dialect,
-  adapter: TaskAdapter,
+  adapter: TaskAdapter | AsyncTaskAdapter,
   redact: (text: string) => string,
 ): ApiError {
   if (status === 404 && text.trim() === "" && dialect === "openai") {
@@ -193,13 +208,18 @@ async function readResponseText(
   url: string,
   redact: (text: string) => string,
   timeoutSeconds: number,
+  /** Replaces the generic timeout message, for a request whose timeout must say more. */
+  timeoutMessage?: string,
 ): Promise<string> {
   try {
     return await response.text();
   } catch (error) {
     if (isTimeoutError(error)) {
       throw new ApiError(
-        `API request timeout after ${timeoutSeconds}s while reading the response from ${redact(hostOf(url))}`,
+        redact(
+          timeoutMessage ??
+            `API request timeout after ${timeoutSeconds}s while reading the response from ${redact(hostOf(url))}`,
+        ),
       );
     }
     throw new ApiError(
@@ -285,4 +305,188 @@ export async function callApi(params: CallApiParams): Promise<ParsedResponse> {
     parsed.requestId = requestId;
   }
   return parsed;
+}
+
+export interface CreateTaskParams {
+  /** The resolved provider, task and model this create runs under. */
+  binding: TaskBinding;
+  apiKey: string;
+  request: VideoRequest;
+}
+
+export interface PollTaskParams {
+  /** The resolved provider and task; the model is not sent when polling. */
+  binding: TaskBinding;
+  apiKey: string;
+  taskId: string;
+}
+
+interface VideoRoundTripParams {
+  binding: TaskBinding;
+  /** The binding's video adapter, resolved by the caller before the fetch. */
+  adapter: AsyncTaskAdapter;
+  apiKey: string;
+  method: "GET" | "POST";
+  url: string;
+  /** Serialized by the caller: a body that cannot be serialized is not a network failure. */
+  body?: string;
+  /**
+   * Replaces the generic timeout message. Only a create needs one: a task that
+   * timed out may already exist and be paid for, so it must not read as "retry".
+   */
+  timeoutMessage?: string;
+  /** Replaces the generic message for a 404, which for a poll means "unknown id here". */
+  notFoundMessage?: string;
+}
+
+interface VideoRoundTrip {
+  json: unknown;
+  requestId?: string;
+}
+
+/**
+ * A create timeout is the dangerous one: the request may have reached the
+ * server and been accepted. The id is unknown at this point, so the remedy can
+ * only point at `video status` — without it the first instinct is to resubmit
+ * and pay twice.
+ */
+function createTimeoutMessage(provider: ProviderConfig): string {
+  return (
+    `${provider.name} create request timed out after ${REQUEST_TIMEOUT_MS / 1000}s: ` +
+    "the task may already have been created and paid for. " +
+    `Check it with "mediagen video status <id> --provider ${provider.name}" before submitting again.`
+  );
+}
+
+/**
+ * A poll 404 is not a failed task: it is an id this host has never heard of,
+ * which is what a wrong `--provider` looks like. Saying so turns "the task
+ * failed" into one flag to check.
+ */
+function unknownTaskMessage(provider: ProviderConfig, taskId: string, host: string): string {
+  return [
+    // The id is echoed back, so it is treated like any other untrusted text.
+    `${provider.name} API request failed with status 404: no task "${oneLine(taskId)}" exists on ${host}.`,
+    "That is not a failed task: a task id is readable only on the provider that created it, " +
+      "so check --provider and that the id is complete.",
+  ].join("\n");
+}
+
+function requestIdOf(response: Response): string | undefined {
+  const header = response.headers.get("x-request-id");
+  return header === null || header === "" ? undefined : header;
+}
+
+/**
+ * One create or poll round trip: bearer auth, the single-request timeout, and
+ * the same error parsing and redaction the image path uses. Both verbs share it
+ * because they must fail, and stay silent about the key, in exactly one way.
+ */
+async function sendVideoRequest(params: VideoRoundTripParams): Promise<VideoRoundTrip> {
+  const { binding, adapter, apiKey, method, url, body, timeoutMessage, notFoundMessage } = params;
+  const provider = binding.provider;
+  const redact = redactorFor(apiKey);
+  const timeoutSeconds = REQUEST_TIMEOUT_MS / 1000;
+  const headers: Record<string, string> = { Authorization: `Bearer ${apiKey}` };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers,
+      body,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (isTimeoutError(error)) {
+      throw new ApiError(
+        redact(
+          timeoutMessage ??
+            `${provider.name} API request timeout after ${timeoutSeconds}s (${url})`,
+        ),
+      );
+    }
+    throw new ApiError(
+      `${provider.name} API request to ${redact(hostOf(url))} failed: ${redact(errorMessage(error))}`,
+    );
+  }
+
+  const text = await readResponseText(
+    response,
+    url,
+    redact,
+    timeoutSeconds,
+    // A create whose body could not be read may already be accepted and paid
+    // for, so the dangerous wording has to survive a read timeout too.
+    timeoutMessage,
+  );
+
+  if (!response.ok) {
+    if (response.status === 404 && notFoundMessage !== undefined) {
+      throw new ApiError(redact(notFoundMessage));
+    }
+    throw errorForStatus(text, response.status, provider, binding.dialect, adapter, redact);
+  }
+
+  return {
+    json: parseJson(text, response.status, redact),
+    requestId: requestIdOf(response),
+  };
+}
+
+/**
+ * Creates one async video task and returns its id. The request is built and
+ * serialized before the fetch, so a request the adapter rejects never costs
+ * money; the create itself is sent exactly once and never retried.
+ */
+export async function createTask(
+  params: CreateTaskParams,
+): Promise<{ taskId: string; requestId?: string }> {
+  const { binding, apiKey, request } = params;
+  const adapter = getAdapter(binding.dialect, "video");
+  const payload = JSON.stringify(adapter.buildRequest(request));
+  const url = `${binding.provider.base_url}${binding.path ?? adapter.createPath}`;
+
+  const { json, requestId } = await sendVideoRequest({
+    binding,
+    adapter,
+    apiKey,
+    method: "POST",
+    url,
+    body: payload,
+    timeoutMessage: createTimeoutMessage(binding.provider),
+  });
+
+  const taskId = adapter.taskIdFrom(json);
+  return requestId === undefined ? { taskId } : { taskId, requestId };
+}
+
+/**
+ * Reads one poll. The path comes from the adapter, never from a suffix rule: a
+ * dialect's poll prefix can differ from its create path. A task's own `path`
+ * covers both verbs, because it describes a host's layout, not one endpoint.
+ */
+export async function pollTask(
+  params: PollTaskParams,
+): Promise<TaskOutcome & { requestId?: string }> {
+  const { binding, apiKey, taskId } = params;
+  const provider = binding.provider;
+  const adapter = getAdapter(binding.dialect, "video");
+  const url =
+    binding.path === undefined
+      ? `${provider.base_url}${adapter.pollPath(taskId)}`
+      : `${provider.base_url}${binding.path}/${encodeURIComponent(taskId)}`;
+
+  const { json, requestId } = await sendVideoRequest({
+    binding,
+    adapter,
+    apiKey,
+    method: "GET",
+    url,
+    notFoundMessage: unknownTaskMessage(provider, taskId, hostOf(url)),
+  });
+
+  const outcome = adapter.pollOutcome(json);
+  return requestId === undefined ? outcome : { ...outcome, requestId };
 }
