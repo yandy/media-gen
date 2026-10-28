@@ -363,6 +363,28 @@ path = "/images/generations"
     expect(config.providers["ark-plan"].tasks.image?.path).toBe("/images/generations");
   });
 
+  it("strips a trailing slash from a path, but leaves a bare slash alone", () => {
+    const config = taskConfig(`[providers.ark-plan]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+
+[providers.ark-plan.image]
+default = "m"
+models = ["m"]
+path = "/images/generations/"
+
+[providers.ark-plan.video]
+default = "m"
+models = ["m"]
+path = "/"
+`);
+
+    // A trailing slash would yield `/images/generations//{id}` once the id is
+    // appended, so it is gone by the time the value is used.
+    expect(config.providers["ark-plan"].tasks.image?.path).toBe("/images/generations");
+    expect(config.providers["ark-plan"].tasks.video?.path).toBe("/");
+  });
+
   it("rejects a path that is not absolute or carries a query", () => {
     for (const bad of ["images/generations", "/images/generations?x=1", "/a#b", ""]) {
       writeConfig(`[providers.p]

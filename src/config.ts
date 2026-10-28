@@ -465,7 +465,10 @@ function readTaskBlock(
           `path under ${where} must start with "/" and carry no query or fragment (${file})`,
         );
       }
-      block.path = value;
+      // A trailing slash would double once the id is appended
+      // (`/v1/videos//{id}`), so it is stripped here, where the value is
+      // validated; a bare "/" stays "/".
+      block.path = value.replace(/\/+$/, "") || "/";
       continue;
     }
 

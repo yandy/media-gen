@@ -84,13 +84,16 @@ function oneLine(text: string): string {
 }
 
 /**
- * Caps the length so an HTML error page or a wall of JSON cannot flood the
- * terminal or an agent's context window.
+ * Caps the length so an HTML error page, a wall of JSON or a pasted id cannot
+ * flood the terminal or an agent's context window.
  */
+function capLength(line: string): string {
+  return line.length > BODY_EXCERPT_LIMIT ? `${line.slice(0, BODY_EXCERPT_LIMIT)}...` : line;
+}
+
 function bodyExcerpt(text: string): string {
   const line = oneLine(text);
-  if (line === "") return "empty body";
-  return line.length > BODY_EXCERPT_LIMIT ? `${line.slice(0, BODY_EXCERPT_LIMIT)}...` : line;
+  return line === "" ? "empty body" : capLength(line);
 }
 
 /** Extracts the host for error messages without requiring a well-formed URL. */
@@ -297,8 +300,7 @@ export async function callApi(params: CallApiParams): Promise<ParsedResponse> {
   }
 
   const json = parseJson(text, response.status, redact);
-  const headerRequestId = response.headers.get("x-request-id");
-  const requestId = headerRequestId === null || headerRequestId === "" ? undefined : headerRequestId;
+  const requestId = requestIdOf(response);
 
   const parsed = adapter.parseResponse(json, requestId);
   if (parsed.requestId === undefined && requestId !== undefined) {
@@ -335,8 +337,12 @@ interface VideoRoundTripParams {
    * timed out may already exist and be paid for, so it must not read as "retry".
    */
   timeoutMessage?: string;
-  /** Replaces the generic message for a 404, which for a poll means "unknown id here". */
-  notFoundMessage?: string;
+  /**
+   * Replaces the generic message for a 404, which for a poll means "unknown id
+   * here". It receives the response body: a proxy whose host is right and whose
+   * path is wrong answers 404 too, and only the vendor's own line says so.
+   */
+  notFoundMessage?: (bodyText: string) => string;
 }
 
 interface VideoRoundTrip {
@@ -346,30 +352,42 @@ interface VideoRoundTrip {
 
 /**
  * A create timeout is the dangerous one: the request may have reached the
- * server and been accepted. The id is unknown at this point, so the remedy can
- * only point at `video status` — without it the first instinct is to resubmit
- * and pay twice.
+ * server and been accepted. No id came back, so the remedy cannot be a command
+ * that needs one: say the task may exist and send the user to the one place that
+ * can find it, or the first instinct is to resubmit and pay twice.
  */
 function createTimeoutMessage(provider: ProviderConfig): string {
   return (
     `${provider.name} create request timed out after ${REQUEST_TIMEOUT_MS / 1000}s: ` +
     "the task may already have been created and paid for. " +
-    `Check it with "mediagen video status <id> --provider ${provider.name}" before submitting again.`
+    "No task id is known here, so check your provider's console or usage page for a " +
+    "recent task before submitting again."
   );
 }
 
 /**
  * A poll 404 is not a failed task: it is an id this host has never heard of,
  * which is what a wrong `--provider` looks like. Saying so turns "the task
- * failed" into one flag to check.
+ * failed" into one flag to check. A 404 whose body carries the vendor's own
+ * explanation is quoted too: a proxy with the right host and a wrong `path`
+ * answers the same way, and `--provider` is not the remedy for that.
  */
-function unknownTaskMessage(provider: ProviderConfig, taskId: string, host: string): string {
-  return [
-    // The id is echoed back, so it is treated like any other untrusted text.
-    `${provider.name} API request failed with status 404: no task "${oneLine(taskId)}" exists on ${host}.`,
-    "That is not a failed task: a task id is readable only on the provider that created it, " +
-      "so check --provider and that the id is complete.",
-  ].join("\n");
+function unknownTaskMessage(
+  provider: ProviderConfig,
+  taskId: string,
+  host: string,
+): (bodyText: string) => string {
+  return (bodyText) => {
+    const lines = [
+      // The id is echoed back, so it is treated like any other untrusted text and
+      // bounded like a body: pasting tens of KB must not flood the terminal.
+      `${provider.name} API request failed with status 404: no task "${capLength(oneLine(taskId))}" exists on ${host}.`,
+      "That is not a failed task: a task id is readable only on the provider that created it, " +
+        "so check --provider and that the id is complete.",
+    ];
+    if (oneLine(bodyText) !== "") lines.push(`The response said: ${bodyExcerpt(bodyText)}`);
+    return lines.join("\n");
+  };
 }
 
 function requestIdOf(response: Response): string | undefined {
@@ -424,7 +442,7 @@ async function sendVideoRequest(params: VideoRoundTripParams): Promise<VideoRoun
 
   if (!response.ok) {
     if (response.status === 404 && notFoundMessage !== undefined) {
-      throw new ApiError(redact(notFoundMessage));
+      throw new ApiError(redact(notFoundMessage(text)));
     }
     throw errorForStatus(text, response.status, provider, binding.dialect, adapter, redact);
   }

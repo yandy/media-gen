@@ -847,7 +847,10 @@ describe("createTask: the async video task is created exactly once", () => {
 
     expect(error).toBeInstanceOf(ApiError);
     expect(error.message).toMatch(/may already have been created and paid/i);
-    expect(error.message).toContain("video status");
+    // No id exists at this point, so the remedy cannot be a command that needs one.
+    expect(error.message).toMatch(/no task id is known/i);
+    expect(error.message).toMatch(/console|usage/i);
+    expect(error.message).not.toContain("video status");
   });
 
   it("keeps that warning when only the response body times out", async () => {
@@ -939,6 +942,23 @@ describe("pollTask: one poll, read by the adapter", () => {
     expect(error.message).toMatch(/not a failed task/i);
   });
 
+  it("quotes the vendor when the poll 404 carries a body", async () => {
+    stubVideoFetch(
+      jsonResponse({ error: { code: "NotFound", message: `no such route: ${API_KEY}` } }, 404),
+    );
+
+    const error = await rejection(
+      pollTask({ binding: arkBinding(), apiKey: API_KEY, taskId: "gone" }),
+    );
+
+    // A right host with a wrong path answers 404 too, and the two lines above
+    // point at --provider, so the vendor's own line has to be there.
+    expect(error.message).toContain("no such route");
+    expect(error.message).toContain("gone");
+    expect(error.message).toMatch(/--provider/);
+    expect(error.message).not.toContain(API_KEY);
+  });
+
   it("does not let a hostile task id drive the terminal in that 404 message", async () => {
     stubVideoFetch(new Response("", { status: 404 }));
 
@@ -950,6 +970,19 @@ describe("pollTask: one poll, read by the adapter", () => {
     // The message is deliberately two lines; every other control byte is gone.
     expect(error.message).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
     expect(error.message).not.toContain("[2J");
+  });
+
+  it("bounds a very long task id so it cannot flood the terminal", async () => {
+    stubVideoFetch(new Response("", { status: 404 }));
+
+    const error = await rejection(
+      pollTask({ binding: arkBinding(), apiKey: "sk-x", taskId: "x".repeat(20_000) }),
+    );
+
+    // The same 200-character cap a response body gets, plus the ellipsis.
+    expect(error.message).toContain(`${"x".repeat(200)}...`);
+    expect(error.message).not.toContain("x".repeat(201));
+    expect(error.message.length).toBeLessThan(500);
   });
 
   it("uses the plain timeout wording for a poll, which is not paid for", async () => {
