@@ -163,8 +163,8 @@ path = "/images/generations"        # 请求打到 .../api/plan/v3/images/genera
 可用的 origin 或 `path` 值。`path` 只用于「不镜像厂商路径」的主机；平时适配器自带的
 路径仍是默认值。
 
-`video` 表能解析、能校验，但还没有任何方言实现视频适配器：视频任务会明确报这一点，
-`config show` 也不会为它打印 endpoint。
+`video` 表能解析、能校验，`ark` 方言也已实现视频适配器（建任务 → 轮询 → 取结果）；
+但还没有命令驱动它，所以 mediagen 目前仍然只生成图像。
 
 key 跟着 provider 实例走，依次来自 `--api-key`、该实例声明的 `api_key_env`、
 `auth.json`。没有任何方言级的默认 key 变量，所以同一方言的两条入口可以各用各的 key。

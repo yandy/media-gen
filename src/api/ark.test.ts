@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { ApiError, UsageError } from "../errors.js";
 import type { ImageRequest } from "../types.js";
-import { ArkDialect, buildArkRequest, parseArkResponse } from "./ark.js";
+import {
+  ArkDialect,
+  ArkVideoDialect,
+  arkPollOutcome,
+  arkPollPath,
+  buildArkRequest,
+  buildArkVideoRequest,
+  parseArkResponse,
+  taskIdFromArk,
+} from "./ark.js";
 
 function request(overrides: Partial<ImageRequest> = {}): ImageRequest {
   return {
@@ -345,5 +354,88 @@ describe("ArkDialect", () => {
       failures: [],
       requestId: "req-123",
     });
+  });
+});
+
+describe("ark video request", () => {
+  it("sends a text item alone for text-to-video", () => {
+    const body = buildArkVideoRequest({ model: "doubao-seedance-1-0-pro-250528", prompt: "a cat" });
+    expect(body).toEqual({ model: "doubao-seedance-1-0-pro-250528", content: [{ type: "text", text: "a cat" }] });
+  });
+
+  it("appends the first frame after the text with role first_frame", () => {
+    const body = buildArkVideoRequest({ model: "m", prompt: "p", first_frame: "https://x/a.png" });
+    expect(body.content).toEqual([
+      { type: "text", text: "p" },
+      { type: "image_url", image_url: { url: "https://x/a.png" }, role: "first_frame" },
+    ]);
+  });
+
+  it("places every scalar and omits the ones the caller did not set", () => {
+    const body = buildArkVideoRequest({
+      model: "m", prompt: "p", resolution: "720p", ratio: "16:9", duration: 5,
+      seed: 11, watermark: true, generate_audio: false, output_format: "mov",
+    });
+    expect(body).toMatchObject({
+      resolution: "720p", ratio: "16:9", duration: 5, seed: 11,
+      watermark: true, generate_audio: false, output_format: "mov",
+    });
+    expect(Object.keys(body).sort()).toEqual(
+      ["content", "duration", "generate_audio", "model", "output_format", "ratio", "resolution", "seed", "watermark"],
+    );
+  });
+});
+
+describe("ark video task id and polling", () => {
+  it("reads the id from the top-level id field", () => {
+    expect(taskIdFromArk({ id: "cgt-1" })).toBe("cgt-1");
+  });
+
+  it.each([[null], [{}], [{ id: "" }], [{ id: 7 }]])("rejects the malformed create body %j", (body) => {
+    expect(() => taskIdFromArk(body)).toThrow(ApiError);
+  });
+
+  it("polls the same collection with the id appended", () => {
+    expect(arkPollPath("cgt-1")).toBe("/api/v3/contents/generations/tasks/cgt-1");
+    expect(arkPollPath("a/b")).toBe("/api/v3/contents/generations/tasks/a%2Fb");
+  });
+
+  it.each([["queued", "pending"], ["running", "running"]])("maps %s to %s", (status, state) => {
+    expect(arkPollOutcome({ status }).state).toBe(state);
+  });
+
+  it("turns succeeded into a result with the flat response fields", () => {
+    const outcome = arkPollOutcome({
+      status: "succeeded",
+      model: "doubao-seedance-2-0-260128",
+      content: { video_url: "https://x/v.mp4" },
+      duration: 5, resolution: "720p", ratio: "16:9", output_format: "mp4",
+      usage: { completion_tokens: 108900 },
+    });
+    expect(outcome).toEqual({ state: "succeeded", result: {
+      url: "https://x/v.mp4", model: "doubao-seedance-2-0-260128", duration: 5,
+      resolution: "720p", ratio: "16:9", format: "mp4", usage: { completion_tokens: 108900 },
+    }});
+  });
+
+  it("reports failed with the vendor code", () => {
+    const outcome = arkPollOutcome({ status: "failed", error: { code: "OutputVideoSensitiveContentDetected", message: "blocked" } });
+    expect(outcome).toEqual({ state: "failed", failure: { code: "OutputVideoSensitiveContentDetected", message: "blocked" } });
+  });
+
+  it.each(["cancelled", "expired"])("reports %s as a terminal failure naming it", (status) => {
+    const outcome = arkPollOutcome({ status });
+    expect(outcome.state).toBe(status);
+  });
+
+  it("rejects succeeded without a video url, and an unknown status without looping", () => {
+    expect(() => arkPollOutcome({ status: "succeeded", content: {} })).toThrow(ApiError);
+    expect(() => arkPollOutcome({ status: "paused" })).toThrow(/paused/);
+  });
+
+  it("declares the resolutions and the exclusive flags of the ark dialect", () => {
+    expect(ArkVideoDialect.resolutions).toEqual(["480p", "720p", "1080p", "4k"]);
+    expect(ArkVideoDialect.exclusiveFields).toEqual(["generate_audio", "output_format"]);
+    expect(ArkVideoDialect.createPath).toBe("/api/v3/contents/generations/tasks");
   });
 });

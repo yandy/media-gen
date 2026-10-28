@@ -1705,7 +1705,7 @@ models = ["m"]
     expect(result.stdout).toContain("endpoint: (base_url carries a path; declare path = ... or use the origin)");
   });
 
-  it("warns that a video table cannot be used yet", async () => {
+  it("does not warn about a missing adapter for a task the dialect implements", async () => {
     const result = await run([
       "config", "add", "vid",
       "--api-type", "ark",
@@ -1715,20 +1715,21 @@ models = ["m"]
     ]);
 
     expect(result.code).toBe(0);
-    expect(result.stderr).toContain('the "ark" dialect has no "video" adapter yet');
+    expect(result.stderr).not.toContain('no "video" adapter');
   });
 
-  it("shows each provider's tasks and marks the one with no adapter", async () => {
+  it("shows the endpoint of a task that has an adapter", async () => {
     writeConfig(VIDEO_ONLY);
 
     const result = await run(["config", "show"]);
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("video:");
-    expect(result.stdout).toContain("(no adapter yet)");
+    expect(result.stdout).toContain(
+      "endpoint: https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+    );
+    expect(result.stdout).not.toContain("(no adapter yet)");
     expect(result.stdout).toMatch(/timeout_seconds: 1800 \(default\)/);
-    // The adapter owns the path, so a task without one prints no URL at all.
-    expect(result.stdout).not.toContain("/contents/generations");
   });
 
   it("logs in to a provider that only declares a video task", async () => {

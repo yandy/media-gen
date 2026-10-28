@@ -75,10 +75,10 @@ export type Task = "image" | "video";
  * `base_url` stays a single per-provider origin no matter how many tasks the
  * provider serves.
  *
- * Async tasks (both video protocols) will need a second phase — create, poll,
- * fetch result. When they land that becomes an optional `asyncTask` block here
- * (buildHeaders / taskIdFrom / pollPath / parseTaskResult), rather than polling
- * hidden inside parseResponse.
+ * This is the synchronous, one-round-trip shape. Async tasks have a second
+ * phase — create, poll, fetch result — and live in their own
+ * `AsyncTaskAdapter`: a sync adapter cannot express "not finished yet", so
+ * folding the two together would put polling inside parseResponse.
  */
 export interface TaskAdapter {
   createPath: string;
@@ -92,8 +92,71 @@ export interface TaskAdapter {
   parseErrorBody?(json: unknown): { code?: string; message: string } | undefined;
 }
 
+/** The internal request for one video task. Field names are the wire names. */
+export interface VideoRequest {
+  model: string;
+  prompt: string;
+  /** One image, as a URL or data URL; the first frame of the clip. */
+  first_frame?: string;
+  /** Already lower-cased; the dialect translates the casing on the wire. */
+  resolution?: string;
+  ratio?: string;
+  /** Seconds. */
+  duration?: number;
+  seed?: number;
+  watermark?: boolean;
+  generate_audio?: boolean;
+  output_format?: "mp4" | "mov";
+}
+
+/** One video task's output, read from the polling response that finished it. */
+export interface AsyncTaskResult {
+  url: string;
+  /** The model id the server echoed: the name on disk must not be a guess. */
+  model?: string;
+  duration?: number;
+  resolution?: string;
+  ratio?: string;
+  format?: string;
+  usage?: Record<string, unknown>;
+  requestId?: string;
+}
+
+/** How one poll ended. Everything but pending/running is terminal. */
+export type TaskOutcome =
+  | { state: "pending" | "running" }
+  | { state: "succeeded"; result: AsyncTaskResult }
+  | {
+      state: "failed" | "cancelled" | "expired";
+      failure: { code?: string; message: string };
+    };
+
+/**
+ * One task's async wire format: create, poll, read the outcome. The video half
+ * of the registry, next to `TaskAdapter` rather than folded into it.
+ */
+export interface AsyncTaskAdapter {
+  createPath: string;
+  buildRequest(req: VideoRequest): unknown;
+  /** The dialects disagree on the field name, so every one reads its own. */
+  taskIdFrom(json: unknown): string;
+  /** A function, not a suffix rule: a dialect's poll prefix may differ from its create path. */
+  pollPath(id: string): string;
+  /** One poll response into an explicit outcome, or "not done yet". */
+  pollOutcome(json: unknown): TaskOutcome;
+  /** Same contract as `TaskAdapter.parseErrorBody`. */
+  parseErrorBody?(json: unknown): { code?: string; message: string } | undefined;
+  /** Which resolution values this dialect accepts; validated locally before paying. */
+  resolutions: readonly string[];
+  /** Flags only this dialect accepts; another dialect receiving one must fail locally. */
+  exclusiveFields?: readonly (keyof VideoRequest)[];
+}
+
 /** Which tasks this dialect implements; a task absent here has no endpoint yet. */
-export type DialectAdapters = Partial<Record<Task, TaskAdapter>>;
+export type DialectAdapters = {
+  image?: TaskAdapter;
+  video?: AsyncTaskAdapter;
+};
 
 export interface SavedFile {
   path: string;

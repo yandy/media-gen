@@ -514,9 +514,16 @@ describe("resolveSelection", () => {
   });
 
   it("rejects a task the dialect has no adapter for", () => {
-    expect(() => resolveSelection({ provider: "volcengine", task: "video" }, taskConfig())).toThrow(
-      'the "ark" dialect has no "video" adapter yet; implemented tasks: image',
-    );
+    writeConfig(`[providers.gw]
+base_url = "https://gw.example.com"
+
+[providers.gw.video]
+api_type = "dashscope"
+default = "v"
+models = ["v"]
+`);
+    expect(() => resolveSelection({ provider: "gw", task: "video" }, loadConfig()))
+      .toThrow('the "dashscope" dialect has no "video" adapter; implemented tasks: image');
   });
 
   it("rejects an empty models list", () => {
@@ -888,11 +895,10 @@ models = ["v"]
 `);
     const config = loadConfig();
     expect(resolveSelection({ provider: "gw", task: "image" }, config).dialect).toBe("dashscope");
-    // The video half resolves to ark, which has no video adapter yet: reaching
-    // that error proves the task's own protocol was the one that applied.
-    expect(thrownBy(() => resolveSelection({ provider: "gw", task: "video" }, config)).message).toMatch(
-      /the "ark" dialect has no "video" adapter yet/,
-    );
+    // The video half keeps the task's own protocol instead of the provider's.
+    const video = resolveSelection({ provider: "gw", task: "video" }, config);
+    expect(video.dialect).toBe("ark");
+    expect(video.model).toBe("v");
   });
 
   it("names the task table when no protocol is declared anywhere", () => {

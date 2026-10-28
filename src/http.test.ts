@@ -116,8 +116,27 @@ describe("callApi: the binding decides task and timeout", () => {
         apiKey: API_KEY,
         request: imageRequest(),
       }),
-    ).rejects.toThrow('the "openai" dialect has no "video" adapter yet');
+    ).rejects.toThrow('the "openai" dialect has no "video" adapter; implemented tasks: image');
 
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a video binding even on a dialect that has a video adapter, before any fetch", async () => {
+    const fetchMock = stubFetch(() => jsonResponse({ data: [] }));
+
+    const error = await rejection(
+      callApi({
+        binding: bindingFor(
+          { name: "ark", api_type: "ark", base_url: "https://ark.cn-beijing.volces.com" },
+          "video",
+        ),
+        apiKey: API_KEY,
+        request: imageRequest(),
+      }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toContain('"video"');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

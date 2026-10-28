@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ConfigError } from "../errors.js";
 import type { Dialect } from "../types.js";
-import { ArkDialect } from "./ark.js";
+import { ArkDialect, ArkVideoDialect } from "./ark.js";
 import { adapterPath, getAdapter } from "./index.js";
 import { QwenDialect } from "./qwen.js";
 
@@ -22,8 +22,8 @@ describe("the dashscope dialect", () => {
     );
   });
 
-  it("has no video adapter yet", () => {
-    expect(() => getAdapter("dashscope", "video")).toThrow(/no "video" adapter yet/);
+  it("has no video adapter", () => {
+    expect(() => getAdapter("dashscope", "video")).toThrow(/no "video" adapter/);
   });
 });
 
@@ -31,6 +31,10 @@ describe("getAdapter", () => {
   it("returns the dialect's image adapter", () => {
     expect(getAdapter("openai", "image")).toBe(QwenDialect);
     expect(getAdapter("ark", "image")).toBe(ArkDialect);
+  });
+
+  it("returns the dialect's video adapter", () => {
+    expect(getAdapter("ark", "video")).toBe(ArkVideoDialect);
   });
 
   it("gives each image adapter a path that starts at the origin's version segment", () => {
@@ -41,11 +45,11 @@ describe("getAdapter", () => {
   });
 
   it("names the implemented tasks when the dialect has no adapter for the task", () => {
-    const error = thrownBy(() => getAdapter("ark", "video"));
+    const error = thrownBy(() => getAdapter("dashscope", "video"));
 
     expect(error).toBeInstanceOf(ConfigError);
     expect(error.message).toBe(
-      'the "ark" dialect has no "video" adapter yet; implemented tasks: image',
+      'the "dashscope" dialect has no "video" adapter; implemented tasks: image',
     );
   });
 
@@ -71,11 +75,12 @@ describe("getAdapter", () => {
 describe("adapterPath", () => {
   it("returns the path for an implemented dialect and task", () => {
     expect(adapterPath("ark", "image")).toBe("/api/v3/images/generations");
+    expect(adapterPath("ark", "video")).toBe("/api/v3/contents/generations/tasks");
     expect(adapterPath("openai", "image")).toBe("/compatible-mode/v1/images/generations");
   });
 
   it("returns undefined instead of throwing, so a half-written config can still be shown", () => {
-    expect(adapterPath("ark", "video")).toBeUndefined();
+    expect(adapterPath("dashscope", "video")).toBeUndefined();
     expect(adapterPath("nope", "image")).toBeUndefined();
     expect(adapterPath("toString", "image")).toBeUndefined();
   });

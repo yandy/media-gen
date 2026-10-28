@@ -176,8 +176,9 @@ Without `path`, a sub-path under a vendor's own domain is refused before any req
 (it would be doubled), with the origin or the `path` value to use. `path` is only for
 hosts that do not mirror the vendor's layout; the adapter's own path stays the default.
 
-`video` tables parse and are validated, but no dialect has a video adapter yet: a
-video task reports exactly that and `config show` prints no endpoint for it.
+`video` tables parse and are validated, and the `ark` dialect has a video adapter
+(create → poll → result); no command drives it yet, so `mediagen` still generates
+images only.
 
 A key belongs to a provider entry: `--api-key`, else that entry's `api_key_env`,
 else `auth.json`. There is no dialect-level default key variable, so two entries of

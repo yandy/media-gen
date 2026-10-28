@@ -1,6 +1,12 @@
 import { ConfigError } from "../errors.js";
-import type { Dialect, DialectAdapters, Task, TaskAdapter } from "../types.js";
-import { ArkDialect } from "./ark.js";
+import type {
+  AsyncTaskAdapter,
+  Dialect,
+  DialectAdapters,
+  Task,
+  TaskAdapter,
+} from "../types.js";
+import { ArkDialect, ArkVideoDialect } from "./ark.js";
 import { DashscopeDialect } from "./dashscope.js";
 import { QwenDialect } from "./qwen.js";
 
@@ -12,10 +18,10 @@ import { QwenDialect } from "./qwen.js";
  */
 const DIALECTS: Record<Dialect, DialectAdapters> = {
   openai: { image: QwenDialect },
-  // The native DashScope protocol: one sync endpoint for images, and the video
-  // task (build → poll → fetch) lands as a second adapter in the same family.
+  // The native DashScope protocol serves images only: its video task was
+  // dropped, because the wire shapes share nothing with the two async dialects.
   dashscope: { image: DashscopeDialect },
-  ark: { image: ArkDialect },
+  ark: { image: ArkDialect, video: ArkVideoDialect },
 };
 
 /**
@@ -29,7 +35,14 @@ export function adapterPath(apiType: string, task: Task): string | undefined {
   return DIALECTS[apiType as Dialect][task]?.createPath;
 }
 
-export function getAdapter(apiType: Dialect, task: Task): TaskAdapter {
+export function getAdapter(apiType: Dialect, task: "image"): TaskAdapter;
+export function getAdapter(apiType: Dialect, task: "video"): AsyncTaskAdapter;
+/** The task comes from a variable (resolveSelection, callApi) and needs no assertion at the call site. */
+export function getAdapter(apiType: Dialect, task: Task): TaskAdapter | AsyncTaskAdapter;
+export function getAdapter(
+  apiType: Dialect,
+  task: Task,
+): TaskAdapter | AsyncTaskAdapter {
   if (!Object.hasOwn(DIALECTS, apiType)) {
     const allowed = Object.keys(DIALECTS).join(", ");
     throw new ConfigError(
@@ -43,7 +56,7 @@ export function getAdapter(apiType: Dialect, task: Task): TaskAdapter {
     // Naming the tasks that do exist turns "video is missing" into a one-line
     // diagnosis instead of a hunt through the source.
     throw new ConfigError(
-      `the "${apiType}" dialect has no "${task}" adapter yet; ` +
+      `the "${apiType}" dialect has no "${task}" adapter; ` +
         `implemented tasks: ${Object.keys(adapters).join(", ")}`,
     );
   }

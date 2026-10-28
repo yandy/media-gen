@@ -2,6 +2,7 @@ import { ApiError } from "./errors.js";
 import { tomlKey } from "./toml.js";
 import { getAdapter } from "./api/index.js";
 import type {
+  AsyncTaskAdapter,
   Dialect,
   ImageRequest,
   ParsedResponse,
@@ -208,6 +209,16 @@ async function readResponseText(
 }
 
 /**
+ * A `Task` variable picks either half of the registry, and this transport is
+ * the image round trip: it must not build an image body for a video binding.
+ */
+function isImageAdapter(
+  adapter: TaskAdapter | AsyncTaskAdapter,
+): adapter is TaskAdapter {
+  return "parseResponse" in adapter;
+}
+
+/**
  * Sends one request through the (dialect, task) adapter the binding resolved. Transport
  * failures become `ApiError`s; build/parse errors from the adapter propagate
  * untouched because they already explain what the caller must change. Paid
@@ -221,8 +232,14 @@ export async function callApi(params: CallApiParams): Promise<ParsedResponse> {
   // Resolve the dialect and build the body before any network activity so an
   // invalid flag fails before a paid request is sent. Serializing here, outside
   // the transport try, keeps a payload that cannot be serialized from being
-  // misreported as a network failure.
+  // misreported as a network failure. This also throws for a dialect with no
+  // adapter for the task, which is why it comes before the image check.
   const adapter = getAdapter(binding.dialect, binding.task);
+  if (!isImageAdapter(adapter)) {
+    throw new ApiError(
+      `this request is for the image task; the binding is for the "${binding.task}" task`,
+    );
+  }
   const body = adapter.buildRequest(request);
   const payload = JSON.stringify(body);
   const redact = redactorFor(apiKey);
