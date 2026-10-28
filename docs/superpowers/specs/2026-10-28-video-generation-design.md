@@ -212,6 +212,8 @@ export type TaskOutcome =
 
 /** 视频：建任务 → 轮询 → 取结果。 */
 export interface AsyncTaskAdapter {
+  /** 这个方言自己的名字，只用于错误文案（「ark 接受 480p/720p…」）。 */
+  dialect: string;
   createPath: string;
   buildRequest(req: VideoRequest): unknown;
   /** ark: json.id；minimax: json.task_id。 */
@@ -649,6 +651,8 @@ mediagen video status <上一步打印的 task_id> --provider <上一步的 prov
 7. **`ok` 的语义**（§4.9）。视频的 `ok` 恒等于 exit code 是否为 0
    （「建了任务、还在跑」是 `ok: true, files: []`）。这是与图像信封的**刻意差异**。
 8. **`video status` 的文件名会写错 model**（§4.9）。改为优先用服务端回显的 `model`。
+
+第三轮（Task 4 实现时）补的一条：`AsyncTaskAdapter` 多了 `dialect: string`。校验层的错误文案必须点名「哪个方言不接受这一档」，而 `buildVideoRequest(prompt, opts, model, adapter)` 的四个参数里没有名字来源。让适配器带着自己的名字，好过让每个校验函数多一个参数。代价：适配器的名字与 `DIALECTS` 的键是两处真相，所以 Task 8 要加一条不变量测试（每个注册的 video 适配器 `dialect` 都等于它所在的键）。
 
 另有两处内部不一致当轮改掉：`getAdapter` 需要第三个「传变量」的重载（§4.1）；`buildHeaders?()` 从接口里拿掉（没有方言实现它，就是死代码）；
 「现有测试零改动」是过强的说法，已逐条列出必须反转的断言与种子改名会打到的字面量。
