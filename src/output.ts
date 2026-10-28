@@ -1,5 +1,5 @@
 import { ApiError, UsageError } from "./errors.js";
-import type { ParsedResponse, SavedFile } from "./types.js";
+import type { ParsedResponse, SavedFile, SavedMedia } from "./types.js";
 
 export interface RenderedOutput {
   stdout: string;
@@ -46,17 +46,28 @@ export function renderHuman(saved: SavedFile[], res: ParsedResponse): RenderedOu
   };
 }
 
+/**
+ * Only an image result carries `size`; a video result does not. The envelope
+ * asks for the field instead of assuming it, and `undefined` means omitted.
+ */
+function imageSize(meta: SavedMedia | undefined): string | undefined {
+  return meta !== undefined && "size" in meta ? meta.size : undefined;
+}
+
 /** JSON mode is a single stable envelope; absent optional fields are omitted, not null. */
 export function renderJson(saved: SavedFile[], res: ParsedResponse): string {
   const payload: JsonPayload = {
     ok: saved.length > 0,
     partial: saved.length > 0 && res.failures.length > 0,
-    files: saved.map((file) => ({
-      path: file.path,
-      index: file.index,
-      ...(file.meta?.size !== undefined ? { size: file.meta.size } : {}),
-      url: file.url,
-    })),
+    files: saved.map((file) => {
+      const size = imageSize(file.meta);
+      return {
+        path: file.path,
+        index: file.index,
+        ...(size !== undefined ? { size } : {}),
+        url: file.url,
+      };
+    }),
     errors: res.failures.map((failure) => ({
       code: failure.code,
       message: failure.message,

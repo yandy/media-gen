@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildFilename, downloadImage, inferExtension, uniquePath } from "./download.js";
+import {
+  buildFilename,
+  downloadImage,
+  downloadMedia,
+  inferExtension,
+  uniquePath,
+} from "./download.js";
 import { ApiError } from "./errors.js";
 import type { ImageResult } from "./types.js";
 
@@ -150,6 +156,18 @@ describe("inferExtension", () => {
     expect(inferExtension(imageResult({ outputFormat: "JPEG" }))).toBe("jpg");
     expect(inferExtension(imageResult({ outputFormat: "tiff2" }))).toBe("tiff2");
   });
+
+  it("infers mp4 from a video URL, from a video content type, and as the last resort", () => {
+    expect(inferExtension({ url: "https://cdn/x/clip.mp4" }, undefined, "video")).toBe("mp4");
+    expect(inferExtension({ url: "https://cdn/x/clip" }, "video/quicktime", "video")).toBe("mov");
+    expect(inferExtension({ url: "https://cdn/x/clip" }, undefined, "video")).toBe("mp4");
+  });
+
+  it("does not read an image extension off a video URL", () => {
+    // A png suffix on a video would name the file after bytes it does not hold.
+    expect(inferExtension({ url: "https://cdn/x/thumb.png" }, "video/mp4", "image")).toBe("png");
+    expect(inferExtension({ url: "https://cdn/x/thumb.jpg" }, "video/mp4", "video")).toBe("mp4");
+  });
 });
 
 describe("uniquePath", () => {
@@ -179,6 +197,50 @@ describe("uniquePath", () => {
     fs.writeFileSync(file, "first");
 
     expect(uniquePath(file)).toBe(path.join(tempDir, "x-2"));
+  });
+});
+
+describe("downloadMedia", () => {
+  it("names a video file with the provider, model, stamp, index and mp4 suffix", async () => {
+    stubFetch(() => new Response(Buffer.from("fake-mp4"), { status: 200 }));
+
+    const file = await downloadMedia(
+      { url: "https://cdn/x/v.mp4" },
+      {
+        outDir,
+        provider: "volcengine",
+        model: "MiniMax-H3",
+        stamp: "20261028-101500",
+        index: 0,
+        kind: "video",
+      },
+    );
+
+    expect(path.basename(file.path)).toBe("volcengine-minimax-h3-20261028-101500-0.mp4");
+  });
+
+  it("gives a video download its own six-hundred-second deadline", async () => {
+    // A clip is far slower than an image, and the message must state the
+    // deadline that was really used rather than the image one.
+    stubFetch(() => {
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    });
+    const file = downloadMedia(
+      { url: "https://cdn/x/v.mp4" },
+      {
+        outDir,
+        provider: "volcengine",
+        model: "MiniMax-H3",
+        stamp: "20261028-101500",
+        index: 0,
+        kind: "video",
+      },
+    );
+
+    const error = await rejection(file);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toBe("download timeout after 600s for https://cdn/x/v.mp4");
   });
 });
 

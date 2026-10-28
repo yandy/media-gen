@@ -157,9 +157,19 @@ export type DialectAdapters = {
   video?: AsyncTaskAdapter;
 };
 
+/** The two media kinds the download layer saves; each has its own extensions and deadline. */
+export type MediaKind = "image" | "video";
+
+/**
+ * Either kind of media a run can save. A video is a finished async task's
+ * result — there is no second video shape, `AsyncTaskResult` already carries
+ * url/duration/resolution/format.
+ */
+export type SavedMedia = ImageResult | AsyncTaskResult;
+
 export interface SavedFile {
   path: string;
   url: string;
   index: number;
-  meta?: ImageResult;
+  meta?: SavedMedia;
 }
