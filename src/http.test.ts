@@ -136,7 +136,11 @@ describe("callApi: the binding decides task and timeout", () => {
     );
 
     expect(error).toBeInstanceOf(ApiError);
-    expect(error.message).toContain('"video"');
+    // The image transport's own guard, not getAdapter's missing-adapter message:
+    // both mention "video", so only the full sentence proves which one fired.
+    expect(error.message).toBe(
+      'this request is for the image task; the binding is for the "video" task',
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

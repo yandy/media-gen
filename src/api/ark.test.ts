@@ -425,7 +425,28 @@ describe("ark video task id and polling", () => {
 
   it.each(["cancelled", "expired"])("reports %s as a terminal failure naming it", (status) => {
     const outcome = arkPollOutcome({ status });
-    expect(outcome.state).toBe(status);
+    // ark sends no error object for these, so the fallback message must still
+    // say which terminal state the task ended in.
+    expect(outcome).toEqual({ state: status, failure: { message: `ark task ${status}` } });
+  });
+
+  it("falls back to the status when a failed task carries no error object", () => {
+    expect(arkPollOutcome({ status: "failed" })).toEqual({
+      state: "failed",
+      failure: { message: "ark task failed" },
+    });
+  });
+
+  it("falls back to the status when the vendor error message is blank", () => {
+    expect(
+      arkPollOutcome({
+        status: "failed",
+        error: { code: "OutputVideoSensitiveContentDetected", message: "   " },
+      }),
+    ).toEqual({
+      state: "failed",
+      failure: { code: "OutputVideoSensitiveContentDetected", message: "ark task failed" },
+    });
   });
 
   it("rejects succeeded without a video url, and an unknown status without looping", () => {

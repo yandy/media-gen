@@ -119,7 +119,6 @@ export interface AsyncTaskResult {
   ratio?: string;
   format?: string;
   usage?: Record<string, unknown>;
-  requestId?: string;
 }
 
 /** How one poll ended. Everything but pending/running is terminal. */

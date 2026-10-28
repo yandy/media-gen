@@ -202,7 +202,6 @@ export interface AsyncTaskResult {
   ratio?: string;
   format?: string;
   usage?: Record<string, unknown>;
-  requestId?: string;
 }
 
 /** 一次任务查询的结局。pending/running 之外都是终态。 */

@@ -19,7 +19,7 @@ import { QwenDialect } from "./qwen.js";
 const DIALECTS: Record<Dialect, DialectAdapters> = {
   openai: { image: QwenDialect },
   // The native DashScope protocol serves images only: its video task was
-  // dropped, because the wire shapes share nothing with the two async dialects.
+  // dropped, because its wire shape shares nothing with the async video dialects.
   dashscope: { image: DashscopeDialect },
   ark: { image: ArkDialect, video: ArkVideoDialect },
 };
