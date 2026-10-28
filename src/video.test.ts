@@ -36,19 +36,19 @@ afterEach(() => {
 
 describe("validateResolution", () => {
   it("normalizes the resolution case and rejects a tier the dialect does not have", () => {
-    expect(validateResolution("720P", "ark", arkAdapter)).toBe("720p");
-    expect(() => validateResolution("768p", "ark", arkAdapter)).toThrow(/768p/);
-    expect(validateResolution("2K", "minimax", minimaxAdapter)).toBe("2k");
-    expect(() => validateResolution("1080p", "minimax", minimaxAdapter)).toThrow(/1080p/);
+    expect(validateResolution("720P", arkAdapter)).toBe("720p");
+    expect(() => validateResolution("768p", arkAdapter)).toThrow(/768p/);
+    expect(validateResolution("2K", minimaxAdapter)).toBe("2k");
+    expect(() => validateResolution("1080p", minimaxAdapter)).toThrow(/1080p/);
   });
 
   it("rejects a resolution that is a bare number or a pixel pair", () => {
-    expect(() => validateResolution("720", "ark", arkAdapter)).toThrow(UsageError);
-    expect(() => validateResolution("1024x1024", "ark", arkAdapter)).toThrow(UsageError);
+    expect(() => validateResolution("720", arkAdapter)).toThrow(UsageError);
+    expect(() => validateResolution("1024x1024", arkAdapter)).toThrow(UsageError);
   });
 
-  it("names the dialect and the tiers it accepts, and says who checks the model", () => {
-    expect(() => validateResolution("768p", "ark", arkAdapter)).toThrow(
+  it("names the dialect the adapter carries, and the tiers it accepts", () => {
+    expect(() => validateResolution("768p", arkAdapter)).toThrow(
       /the ark dialect accepts 480p, 720p, 1080p, 4k; whether a model supports a tier is checked by the vendor/,
     );
   });
@@ -62,6 +62,21 @@ describe("buildVideoRequest", () => {
       buildVideoRequest("p", { image: ["a.png", "b.png"], noWait: false }, "m", arkAdapter);
     expect(call).toThrow(/one --image/);
     expect(call).toThrow(/last_frame|首尾帧/i);
+  });
+
+  it("quotes the rejected second --image, like every other rejection", () => {
+    const call = (): unknown =>
+      buildVideoRequest("p", { image: ["a.png", "b.png"], noWait: false }, "m", arkAdapter);
+    expect(call).toThrow(/"b\.png"/);
+  });
+
+  it("names --image when the frame path cannot be read", () => {
+    const missing = path.join(tempDir, "missing.png");
+    const call = (): unknown =>
+      buildVideoRequest("p", { image: [missing], noWait: false }, "m", arkAdapter);
+    expect(call).toThrow(UsageError);
+    expect(call).toThrow(/--image/);
+    expect(call).toThrow(new RegExp(missing.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
 
   it("rejects an empty prompt before anything is built", () => {
@@ -99,6 +114,18 @@ describe("buildVideoRequest", () => {
     fs.writeFileSync(frame, PNG_BYTES);
     const req = buildVideoRequest("p", { image: [frame], noWait: false }, "m", arkAdapter);
     expect(req.first_frame).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it("puts the normalized resolution, the ratio and a false watermark in the body", () => {
+    const request = buildVideoRequest(
+      "p",
+      { resolution: "720P", ratio: "adaptive", watermark: false, noWait: false },
+      "m",
+      arkAdapter,
+    );
+    expect(request.resolution).toBe("720p");
+    expect(request.ratio).toBe("adaptive");
+    expect(request.watermark).toBe(false);
   });
 
   it("copies only the flags the caller set, so the wire body stays clean", () => {

@@ -40,16 +40,12 @@ export const RATIOS: readonly string[] = ["16:9", "4:3", "1:1", "3:4", "9:16", "
  * Lower case is the internal shape; the dialect translates the casing on the
  * wire (`768p` → `768P` for minimax).
  */
-export function validateResolution(
-  value: string,
-  dialect: string,
-  adapter: AsyncTaskAdapter,
-): string {
+export function validateResolution(value: string, adapter: AsyncTaskAdapter): string {
   const tier = value.trim().toLowerCase();
 
   if (!adapter.resolutions.includes(tier)) {
     throw new UsageError(
-      `invalid --resolution ${JSON.stringify(value)}: the ${dialect} dialect accepts ` +
+      `invalid --resolution ${JSON.stringify(value)}: the ${adapter.dialect} dialect accepts ` +
         `${adapter.resolutions.join(", ")}; whether a model supports a tier is checked by the vendor`,
     );
   }
@@ -106,8 +102,9 @@ function validatePrompt(prompt: string): string {
 function firstFrame(images: readonly string[]): string | undefined {
   if (images.length > 1) {
     throw new UsageError(
-      `only one --image is supported, the clip's first frame; a second image would be a last frame ` +
-        `(last_frame), and first/last-frame mode is not implemented yet`,
+      `only one --image is supported, the clip's first frame; the second --image ` +
+        `${JSON.stringify(images[1])} would be a last frame (last_frame), and first/last-frame mode ` +
+        `is not implemented yet`,
     );
   }
   return images[0];
@@ -167,9 +164,7 @@ export function buildVideoRequest(
   // the model, is the vendor's and is never answered here.
   rejectUndeclaredFlags(opts, adapter);
   const resolution =
-    opts.resolution === undefined
-      ? undefined
-      : validateResolution(opts.resolution, adapter.dialect, adapter);
+    opts.resolution === undefined ? undefined : validateResolution(opts.resolution, adapter);
 
   const request: VideoRequest = { model, prompt: text };
   if (resolution !== undefined) request.resolution = resolution;
@@ -182,7 +177,21 @@ export function buildVideoRequest(
 
   // The frame is read last: every flag above refuses for free, and a missing
   // file must not be reported in place of a flag the user has to fix first.
-  if (frame !== undefined) request.first_frame = toImageInput(frame);
+  if (frame !== undefined) request.first_frame = readFrame(frame);
 
   return request;
+}
+
+/**
+ * `toImageInput` is shared with the image path and none of its messages name a
+ * flag, so the video path re-labels the failure as `--image` while keeping the
+ * original cause's text and the exit-code-2 `UsageError` type.
+ */
+function readFrame(value: string): string {
+  try {
+    return toImageInput(value);
+  } catch (error) {
+    if (!(error instanceof UsageError)) throw error;
+    throw new UsageError(`invalid --image ${JSON.stringify(value)}: ${error.message}`);
+  }
 }
