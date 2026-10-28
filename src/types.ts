@@ -179,3 +179,28 @@ export interface SavedFile {
   index: number;
   meta?: SavedMedia;
 }
+
+/**
+ * The clock and the wait of a polling run, injected so a test can cross a 30-minute
+ * budget without waiting and without a real clock. Production passes the real thing.
+ */
+export interface VideoDeps {
+  sleep(ms: number): Promise<void>;
+  /** Milliseconds since the epoch; only differences are meaningful. */
+  now(): number;
+}
+
+/**
+ * One video run's outcome: the task it created, where that task stands, and the file
+ * it saved when it got that far. `saved` is empty for a task that is still running, so
+ * "paid but unfinished" is a success with no files, never an error without an id.
+ */
+export interface VideoResult {
+  saved: SavedFile[];
+  taskId: string;
+  status: "pending" | "running" | "succeeded";
+  /** The finished task's server-side result; absent until the task succeeds. */
+  response: AsyncTaskResult | undefined;
+  usage?: Record<string, unknown>;
+  requestId?: string;
+}

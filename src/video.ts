@@ -1,6 +1,26 @@
-import { UsageError } from "./errors.js";
-import type { AsyncTaskAdapter, VideoRequest } from "./types.js";
-import { toImageInput } from "./util.js";
+import { getAdapter } from "./api/index.js";
+import { resolveApiKey } from "./auth.js";
+import { loadConfig, resolveSelection } from "./config.js";
+import { downloadMedia } from "./download.js";
+import { ApiError, NO_RESPONSE_STATUS, UsageError } from "./errors.js";
+import {
+  ensureOutDir,
+  missingKeyError,
+  normalizeBaseUrl,
+  resolveOutDir,
+} from "./generate.js";
+import { createTask, pollTask, safeLine } from "./http.js";
+import type {
+  AsyncTaskAdapter,
+  AsyncTaskResult,
+  SavedFile,
+  TaskBinding,
+  TaskOutcome,
+  VideoDeps,
+  VideoRequest,
+  VideoResult,
+} from "./types.js";
+import { nowStamp, toImageInput } from "./util.js";
 
 /** Everything `video generate` may carry; `--n` and `--size` are image-only. */
 export interface VideoOptions {
@@ -193,5 +213,294 @@ function readFrame(value: string): string {
   } catch (error) {
     if (!(error instanceof UsageError)) throw error;
     throw new UsageError(`invalid --image ${JSON.stringify(value)}: ${error.message}`);
+  }
+}
+
+/**
+ * The poll schedule. The first wait is short so a fast model does not idle, and the
+ * curve flattens at `POLL_MAX_MS` so a long queue does not spend the budget on
+ * requests. Both vendors recommend roughly ten seconds; polling faster than that
+ * for the whole run would just burn rate limit.
+ */
+export const POLL_INITIAL_MS = 2_000;
+export const POLL_FACTOR = 1.5;
+export const POLL_MAX_MS = 10_000;
+/**
+ * A poll is a GET, so a transient failure may be retried; five in a row is an
+ * outage or a broken key, and waiting out the rest of a 30-minute budget for it
+ * would only delay the report.
+ */
+export const POLL_MAX_CONSECUTIVE_FAILURES = 5;
+
+/** The production clock; tests inject one that never sleeps. */
+const REAL_DEPS: VideoDeps = {
+  sleep: (ms) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    }),
+  now: () => Date.now(),
+};
+
+function nextDelay(delay: number): number {
+  return Math.min(Math.round(delay * POLL_FACTOR), POLL_MAX_MS);
+}
+
+/**
+ * One video task from a prompt to a file on disk: create, wait, download.
+ *
+ * The order mirrors `runGenerate`: every check that can fail for free runs before
+ * the first `fetch`, so a missing key or an unwritable `--out-dir` costs nothing.
+ * The create is sent exactly once on every path — a video task is the one request
+ * in this CLI that is not idempotent, so a retry there is a second charge.
+ */
+export async function runVideoGenerate(
+  prompt: string,
+  opts: VideoOptions,
+  deps: VideoDeps = REAL_DEPS,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<VideoResult> {
+  const baseUrl = opts.baseUrl === undefined ? undefined : normalizeBaseUrl(opts.baseUrl);
+
+  const config = loadConfig();
+  // The file's values are validated before `--base-url` may override one of them:
+  // a one-off flag must not be able to hide a broken config.toml.
+  const selection = resolveSelection(
+    { provider: opts.provider, model: opts.model, task: "video" },
+    config,
+  );
+  const binding: TaskBinding =
+    baseUrl === undefined
+      ? selection
+      : { ...selection, provider: { ...selection.provider, base_url: baseUrl } };
+
+  const adapter = getAdapter(binding.dialect, "video");
+  const request = buildVideoRequest(prompt, opts, binding.model, adapter);
+
+  const auth = resolveApiKey(binding.provider, opts.apiKey, env);
+  if (auth === null) throw missingKeyError(binding.provider);
+
+  const outDir = resolveOutDir(opts.outDir, config.output_dir);
+  // Before the create: an out-dir that cannot be written must not be discovered
+  // after the money is spent.
+  ensureOutDir(outDir);
+
+  const created = await createTask({ binding, apiKey: auth.key, request });
+  noteTaskCreated(created.taskId, opts.noWait);
+
+  if (opts.noWait) {
+    const pending: VideoResult = {
+      saved: [],
+      taskId: created.taskId,
+      status: "pending",
+      response: undefined,
+    };
+    if (created.requestId !== undefined) pending.requestId = created.requestId;
+    return pending;
+  }
+
+  const waited = await waitForTask(binding, auth.key, created.taskId, deps);
+  const media = waited.result;
+  const saved = await saveVideo(media, {
+    outDir,
+    provider: binding.provider.name,
+    // The model the server echoed, not the one we asked for: `video status` builds
+    // a binding from the default model, and naming a 2.5 clip after 1.0 would be a
+    // false statement about its contents.
+    model: media.model ?? binding.model,
+    taskId: created.taskId,
+  });
+
+  const result: VideoResult = {
+    saved: [saved],
+    taskId: created.taskId,
+    status: "succeeded",
+    response: media,
+  };
+  if (media.usage !== undefined) result.usage = media.usage;
+  const requestId = waited.requestId ?? created.requestId;
+  if (requestId !== undefined) result.requestId = requestId;
+  return result;
+}
+
+/**
+ * The id reaches the terminal before the first poll, not with the result: if the
+ * process is killed while waiting, this line is the only thing that makes the paid
+ * task recoverable. stderr, because stdout carries results only.
+ */
+function noteTaskCreated(taskId: string, noWait: boolean): void {
+  const id = safeLine(taskId);
+  const remedy = noWait
+    ? `fetch it later with "mediagen video status ${id}"`
+    : `if this process is interrupted, resume with "mediagen video status ${id}"`;
+  process.stderr.write(`note: task ${id} was created and paid for; ${remedy}\n`);
+}
+
+interface WaitedTask {
+  result: AsyncTaskResult;
+  requestId?: string;
+}
+
+/**
+ * Polls until the task reaches a terminal state or the budget runs out.
+ *
+ * `binding.timeout_ms` is the budget and nothing else: not one request's deadline
+ * (that lives in `pollTask`) and not the download's. A transient poll failure is
+ * retried on the same backoff curve as a wait — a GET costs nothing, so it is the
+ * create that may never be retried.
+ */
+async function waitForTask(
+  binding: TaskBinding,
+  apiKey: string,
+  taskId: string,
+  deps: VideoDeps,
+): Promise<WaitedTask> {
+  const deadline = deps.now() + binding.timeout_ms;
+  let delay = POLL_INITIAL_MS;
+  let failures = 0;
+
+  for (;;) {
+    await deps.sleep(delay);
+    // Checked before the poll, so an exhausted budget spends no request and is
+    // reported as "unfinished", never as a failed task.
+    if (deps.now() >= deadline) throw notFinishedError(binding, taskId);
+
+    let polled: TaskOutcome & { requestId?: string };
+    try {
+      polled = await pollTask({ binding, apiKey, taskId });
+    } catch (error) {
+      if (!isTransientPollFailure(error)) throw error;
+      failures += 1;
+      if (failures >= POLL_MAX_CONSECUTIVE_FAILURES) throw gaveUpPollingError(binding, taskId, error);
+      delay = nextDelay(delay);
+      continue;
+    }
+
+    failures = 0;
+    // The intersection above cannot be narrowed by discriminant; the plain union can.
+    const outcome: TaskOutcome = polled;
+    switch (outcome.state) {
+      case "succeeded":
+        return polled.requestId === undefined
+          ? { result: outcome.result }
+          : { result: outcome.result, requestId: polled.requestId };
+      case "pending":
+      case "running":
+        delay = nextDelay(delay);
+        continue;
+      default:
+        throw taskEndedError(binding, taskId, outcome);
+    }
+  }
+}
+
+/**
+ * Whether a failed poll may be tried again. The decision reads the HTTP status the
+ * error carries, never its message text: `429` and `5xx` and a request that got no
+ * response at all are worth another try inside the budget. Any other status — 401,
+ * 403, 404, a 400 — is the key, the config or the task id, and retrying it only
+ * delays the report; so is an error with no status at all, which the adapter raised
+ * because it could not read the body.
+ */
+function isTransientPollFailure(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return true;
+  const status = error.status;
+  // No status means the adapter rejected the body, not the transport: an unknown
+  // task status must surface at once instead of being polled until the budget dies.
+  if (status === undefined) return false;
+  return status === NO_RESPONSE_STATUS || status === 429 || status >= 500;
+}
+
+/**
+ * The one sentence that stops a run from paying twice. Both errors that end polling
+ * without knowing the task's state end with it, because the task behind them is
+ * already created and charged.
+ */
+function resumeHint(id: string): string {
+  return (
+    `The task was created and paid for, so do not resubmit it: run ` +
+    `"mediagen video status ${id}", which checks it and downloads the clip once it is ready.`
+  );
+}
+
+/**
+ * The budget ran out with the task still running. Not a failed task: it is paid for
+ * and still going, so the wording has to make resubmitting — and paying twice — the
+ * obviously wrong move, and hand back the id that resumes it.
+ */
+function notFinishedError(binding: TaskBinding, taskId: string): ApiError {
+  const id = safeLine(taskId);
+  return new ApiError(
+    `task ${id} has not finished after the ${binding.timeout_ms / 1000}s poll budget ` +
+      "(raise timeout_seconds on this provider's video task to wait longer). " +
+      resumeHint(id),
+    "TaskNotFinished",
+    taskId,
+  );
+}
+
+/**
+ * Polling stopped because the polls kept failing, which says nothing about the task:
+ * it may well be running. The reason is kept verbatim — it names the status that
+ * kept failing — and the id travels along for the same reason as above.
+ */
+function gaveUpPollingError(binding: TaskBinding, taskId: string, cause: unknown): ApiError {
+  const id = safeLine(taskId);
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  const code = cause instanceof ApiError && cause.code !== undefined ? cause.code : "PollFailed";
+  return new ApiError(
+    `polling task ${id} gave up after ${POLL_MAX_CONSECUTIVE_FAILURES} failures in a row: ` +
+      `${reason}. ${resumeHint(id)}`,
+    code,
+    taskId,
+  );
+}
+
+/**
+ * A terminal task state. The vendor's own line is kept because it is the only place
+ * that says why, and the id travels on the error so the caller's envelope can name
+ * the task without anyone parsing the message.
+ */
+function taskEndedError(
+  binding: TaskBinding,
+  taskId: string,
+  outcome: Extract<TaskOutcome, { state: "failed" | "cancelled" | "expired" }>,
+): ApiError {
+  const id = safeLine(taskId);
+  return new ApiError(
+    `${binding.provider.name} video task ${id} ${outcome.state}: ${safeLine(outcome.failure.message)}`,
+    outcome.failure.code,
+    taskId,
+  );
+}
+
+/**
+ * One task, one clip, so the index is always 0. A failed download is not a failed
+ * task: the clip exists at the vendor for 24 hours and the task is already paid for,
+ * so the error carries the id that fetches it again instead of inviting a rerun.
+ */
+async function saveVideo(
+  media: AsyncTaskResult,
+  params: { outDir: string; provider: string; model: string; taskId: string },
+): Promise<SavedFile> {
+  try {
+    return await downloadMedia(media, {
+      kind: "video",
+      outDir: params.outDir,
+      provider: params.provider,
+      model: params.model,
+      stamp: nowStamp(),
+      index: 0,
+    });
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    const id = safeLine(params.taskId);
+    const code = error instanceof ApiError && error.code !== undefined ? error.code : "DownloadError";
+    throw new ApiError(
+      `task ${id} succeeded but its video could not be saved: ${cause}. ` +
+        `The task is paid for, so do not generate it again: "mediagen video status ${id}" ` +
+        "downloads the clip without paying twice.",
+      code,
+      params.taskId,
+    );
   }
 }

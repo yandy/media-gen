@@ -14,14 +14,32 @@ export class UsageError extends Error {
   }
 }
 
-/** A vendor API call failed. `code` carries the vendor error code when available. */
+/**
+ * The `status` of a failure that never produced a response: a connection error or
+ * a request that timed out. Zero, because no HTTP response carries it, and it is a
+ * number so a retry policy can decide by reading one field for every failure it
+ * sees rather than by matching message text.
+ */
+export const NO_RESPONSE_STATUS = 0;
+
+/**
+ * A vendor API call failed. `code` carries the vendor error code when available;
+ * `taskId` and `status` are what a paid async task needs to be recoverable — the id
+ * that resumes it and the HTTP status a retry policy classifies on.
+ */
 export class ApiError extends Error {
   readonly code?: string;
+  /** The task this failure is about, when one exists: what `video status` resumes. */
+  readonly taskId?: string;
+  /** The HTTP status, or `NO_RESPONSE_STATUS` when the request got no response at all. */
+  readonly status?: number;
 
-  constructor(message: string, code?: string) {
+  constructor(message: string, code?: string, taskId?: string, status?: number) {
     super(message);
     this.name = "ApiError";
     this.code = code;
+    this.taskId = taskId;
+    this.status = status;
   }
 }
 

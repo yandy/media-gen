@@ -1,4 +1,4 @@
-import { ApiError } from "./errors.js";
+import { ApiError, NO_RESPONSE_STATUS } from "./errors.js";
 import { tomlKey } from "./toml.js";
 import { getAdapter } from "./api/index.js";
 import type {
@@ -96,6 +96,25 @@ function bodyExcerpt(text: string): string {
   return line === "" ? "empty body" : capLength(line);
 }
 
+/**
+ * Bounds and sanitizes one untrusted line for the terminal: escape and control
+ * bytes are stripped, whitespace collapsed and the length capped. Every string this
+ * module echoes goes through it, and so does every vendor string another module
+ * echoes back (a task id from a create response).
+ */
+export function safeLine(text: string): string {
+  return capLength(oneLine(text));
+}
+
+/**
+ * Builds an `ApiError` that carries where the failure came from: the HTTP status
+ * when a response arrived, `NO_RESPONSE_STATUS` when none did. A retry policy
+ * reads that field instead of matching message text.
+ */
+function httpError(message: string, status: number, code?: string): ApiError {
+  return new ApiError(message, code, undefined, status);
+}
+
 /** Extracts the host for error messages without requiring a well-formed URL. */
 function hostOf(url: string): string {
   try {
@@ -141,14 +160,15 @@ function parseJson(
   redact: (text: string) => string,
 ): unknown {
   if (text.trim() === "") {
-    throw new ApiError(`API response with status ${status} has an empty body`);
+    throw httpError(`API response with status ${status} has an empty body`, status);
   }
 
   try {
     return JSON.parse(text);
   } catch {
-    throw new ApiError(
+    throw httpError(
       `API response with status ${status} is not valid JSON: ${redact(bodyExcerpt(text))}`,
+      status,
     );
   }
 }
@@ -179,7 +199,7 @@ function errorForStatus(
   redact: (text: string) => string,
 ): ApiError {
   if (status === 404 && text.trim() === "" && dialect === "openai") {
-    return new ApiError(missingQwenEndpointMessage(provider, status, redact));
+    return httpError(missingQwenEndpointMessage(provider, status, redact), status);
   }
 
   let json: unknown;
@@ -195,14 +215,16 @@ function errorForStatus(
     // headers would otherwise leak the key through `ApiError.code`.
     const code = vendor.code === undefined ? undefined : redact(vendor.code);
     const codeSuffix = code === undefined ? "" : ` (code: ${code})`;
-    return new ApiError(
+    return httpError(
       `${provider.name} API request failed with status ${status}: ${redact(vendor.message)}${codeSuffix}`,
+      status,
       code,
     );
   }
 
-  return new ApiError(
+  return httpError(
     `${provider.name} API request failed with status ${status}: ${redact(bodyExcerpt(text))}`,
+    status,
   );
 }
 
@@ -218,15 +240,17 @@ async function readResponseText(
     return await response.text();
   } catch (error) {
     if (isTimeoutError(error)) {
-      throw new ApiError(
+      throw httpError(
         redact(
           timeoutMessage ??
             `API request timeout after ${timeoutSeconds}s while reading the response from ${redact(hostOf(url))}`,
         ),
+        NO_RESPONSE_STATUS,
       );
     }
-    throw new ApiError(
+    throw httpError(
       `failed to read the API response from ${redact(hostOf(url))}: ${redact(errorMessage(error))}`,
+      NO_RESPONSE_STATUS,
     );
   }
 }
@@ -284,12 +308,14 @@ export async function callApi(params: CallApiParams): Promise<ParsedResponse> {
     });
   } catch (error) {
     if (isTimeoutError(error)) {
-      throw new ApiError(
+      throw httpError(
         `${provider.name} API request timeout after ${timeoutSeconds}s (${redact(url)})`,
+        NO_RESPONSE_STATUS,
       );
     }
-    throw new ApiError(
+    throw httpError(
       `${provider.name} API request to ${redact(hostOf(url))} failed: ${redact(errorMessage(error))}`,
+      NO_RESPONSE_STATUS,
     );
   }
 
@@ -381,7 +407,7 @@ function unknownTaskMessage(
     const lines = [
       // The id is echoed back, so it is treated like any other untrusted text and
       // bounded like a body: pasting tens of KB must not flood the terminal.
-      `${provider.name} API request failed with status 404: no task "${capLength(oneLine(taskId))}" exists on ${host}.`,
+      `${provider.name} API request failed with status 404: no task "${safeLine(taskId)}" exists on ${host}.`,
       "That is not a failed task: a task id is readable only on the provider that created it, " +
         "so check --provider and that the id is complete.",
     ];
@@ -418,15 +444,17 @@ async function sendVideoRequest(params: VideoRoundTripParams): Promise<VideoRoun
     });
   } catch (error) {
     if (isTimeoutError(error)) {
-      throw new ApiError(
+      throw httpError(
         redact(
           timeoutMessage ??
             `${provider.name} API request timeout after ${timeoutSeconds}s (${url})`,
         ),
+        NO_RESPONSE_STATUS,
       );
     }
-    throw new ApiError(
+    throw httpError(
       `${provider.name} API request to ${redact(hostOf(url))} failed: ${redact(errorMessage(error))}`,
+      NO_RESPONSE_STATUS,
     );
   }
 
@@ -442,7 +470,7 @@ async function sendVideoRequest(params: VideoRoundTripParams): Promise<VideoRoun
 
   if (!response.ok) {
     if (response.status === 404 && notFoundMessage !== undefined) {
-      throw new ApiError(redact(notFoundMessage(text)));
+      throw httpError(redact(notFoundMessage(text)), response.status);
     }
     throw errorForStatus(text, response.status, provider, binding.dialect, adapter, redact);
   }

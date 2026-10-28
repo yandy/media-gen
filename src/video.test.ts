@@ -1,13 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArkVideoDialect } from "./api/ark.js";
-import { UsageError } from "./errors.js";
-import type { AsyncTaskAdapter } from "./types.js";
-import { buildVideoRequest, validateResolution } from "./video.js";
+import { writeConfigFile } from "./config.js";
+import { ApiError, ConfigError, UsageError } from "./errors.js";
+import type { AsyncTaskAdapter, VideoDeps } from "./types.js";
+import { buildVideoRequest, runVideoGenerate, validateResolution } from "./video.js";
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02]);
+
+const ARK_KEY = "sk-test-ark-key-0123456789";
+const ARK_VIDEO_URL = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks";
 
 const arkAdapter = ArkVideoDialect;
 
@@ -24,15 +28,97 @@ const minimaxAdapter: AsyncTaskAdapter = {
   exclusiveFields: [],
 };
 
+const originalEnv = {
+  MEDIAGEN_CLI_CONFIG_DIR: process.env.MEDIAGEN_CLI_CONFIG_DIR,
+  MEDIAGEN_CLI_STATE_DIR: process.env.MEDIAGEN_CLI_STATE_DIR,
+  ARK_API_KEY: process.env.ARK_API_KEY,
+};
+
 let tempDir: string;
+let outDir: string;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-video-"));
+  outDir = path.join(tempDir, "out");
+  // The pipeline reads config, a key and an out-dir before it can spend money,
+  // and these tests drive it directly, bypassing main()'s bootstrap.
+  process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(tempDir, "config");
+  process.env.MEDIAGEN_CLI_STATE_DIR = path.join(tempDir, "state");
+  process.env.ARK_API_KEY = ARK_KEY;
+  writeConfigFile(
+    [
+      'default_provider = "volcengine"',
+      `output_dir = ${JSON.stringify(outDir)}`,
+      "",
+      "[providers.volcengine]",
+      'api_type = "ark"',
+      'base_url = "https://ark.cn-beijing.volces.com"',
+      'api_key_env = "ARK_API_KEY"',
+      "",
+      "[providers.volcengine.video]",
+      'default = "doubao-seedance-2-5-260628"',
+      'models = ["doubao-seedance-2-5-260628"]',
+      "",
+    ].join("\n"),
+  );
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  for (const [name, value] of Object.entries(originalEnv)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
+
+function jsonResponse(body: unknown, init: { status?: number; requestId?: string } = {}): Response {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (init.requestId !== undefined) headers["x-request-id"] = init.requestId;
+  return new Response(JSON.stringify(body), { status: init.status ?? 200, headers });
+}
+
+/** Distinctive bytes: if they reach the disk, the download path really ran. */
+function videoBytes(): Response {
+  return new Response(Buffer.from("\x00\x00\x00\x18ftypmp42"), {
+    status: 200, headers: { "content-type": "video/mp4" },
+  });
+}
+
+async function rejection(promise: Promise<unknown>): Promise<Error> {
+  try { await promise; } catch (error) { return error as Error; }
+  throw new Error("expected a rejection, but the promise resolved");
+}
+
+interface ScriptedCall { url: string; method: string; headers: Record<string, string>; body?: Record<string, unknown> }
+
+/**
+ * The Nth call gets the Nth response; the last one repeats once it runs out.
+ * `notes` collects everything written to stderr, which is where the task-id note
+ * must go so stdout stays result-only.
+ */
+function scriptedFetch(responses: Response[]): { calls: ScriptedCall[]; notes: string[] } {
+  const calls: ScriptedCall[] = [];
+  const notes: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({
+      url, method: init?.method ?? "GET",
+      headers: (init?.headers ?? {}) as Record<string, string>,
+      ...(init?.body === undefined ? {} : { body: JSON.parse(String(init.body)) as Record<string, unknown> }),
+    });
+    return responses[Math.min(calls.length - 1, responses.length - 1)];
+  }));
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk) => { notes.push(String(chunk)); return true; });
+  return { calls, notes };
+}
+
+/** No sleeping plus a fake clock; `step` is how far each `now()` advances (default 0: never over budget). */
+function deps(options: { step?: number } = {}): VideoDeps {
+  let clock = 0;
+  const step = options.step ?? 0;
+  return { sleep: async () => {}, now: () => (clock += step) };
+}
 
 describe("validateResolution", () => {
   it("normalizes the resolution case and rejects a tier the dialect does not have", () => {
@@ -133,5 +219,133 @@ describe("buildVideoRequest", () => {
       model: "m",
       prompt: "a cat",
     });
+  });
+});
+
+describe("runVideoGenerate", () => {
+  it("creates, polls queued then running then succeeded, and downloads one file", async () => {
+    const stub = scriptedFetch([
+      jsonResponse({ id: "cgt-1" }),
+      jsonResponse({ status: "queued" }),
+      jsonResponse({ status: "running" }),
+      jsonResponse({ status: "succeeded", content: { video_url: "https://cdn/v.mp4" }, model: "m", duration: 5, resolution: "720p" }),
+      videoBytes(),
+    ]);
+    const result = await runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps());
+    expect(result.taskId).toBe("cgt-1");
+    expect(stub.calls[0].url).toBe(ARK_VIDEO_URL);
+    expect(result.status).toBe("succeeded");
+    expect(result.saved).toHaveLength(1);
+    expect(result.saved[0].path).toMatch(/-0\.mp4$/);
+    expect(stub.calls.filter((c) => c.method === "POST")).toHaveLength(1);   // the paid request goes out once
+  });
+
+  it("writes the task id to stderr before the first poll so an interrupt is recoverable", async () => {
+    const stub = scriptedFetch([
+      jsonResponse({ id: "cgt-1" }),
+      jsonResponse({ status: "running" }),
+      jsonResponse({ status: "succeeded", content: { video_url: "https://cdn/v.mp4" } }),
+      videoBytes(),
+    ]);
+    await runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps());
+    expect(stub.notes[0]).toContain("cgt-1");
+    expect(stub.notes[0]).toMatch(/resume with/);
+  });
+
+  it("stops when the budget is spent and reports it as paid-but-unfinished", async () => {
+    // The clock jumps 16 minutes per now(): the second iteration is past the 1800s budget.
+    const stub = scriptedFetch([
+      jsonResponse({ id: "cgt-1" }),
+      jsonResponse({ status: "running" }),
+      jsonResponse({ status: "running" }),
+    ]);
+    const error = await rejection(runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps({ step: 16 * 60_000 })));
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe("TaskNotFinished");
+    expect((error as ApiError).taskId).toBe("cgt-1");
+    expect(error.message).toContain("cgt-1");
+    expect(error.message).toMatch(/do not (submit|resubmit|re-run)/i);
+    expect(stub.calls.filter((c) => c.method === "POST")).toHaveLength(1);
+  });
+
+  it("does not poll at all with --no-wait", async () => {
+    const stub = scriptedFetch([jsonResponse({ id: "cgt-1" })]);
+    const result = await runVideoGenerate("a cat", { provider: "volcengine", noWait: true }, deps());
+    expect(result.status).toBe("pending");
+    expect(result.saved).toEqual([]);
+    expect(stub.calls).toHaveLength(1);
+  });
+
+  it.each(["failed", "cancelled", "expired"])("reports %s as an error", async (status) => {
+    scriptedFetch([jsonResponse({ id: "cgt-1" }), jsonResponse({ status, error: { code: "X", message: "nope" } })]);
+    const error = await rejection(runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps()));
+    expect(error).toBeInstanceOf(ApiError);
+  });
+
+  it("retries a transient 5xx while polling, then gives up after five in a row", async () => {
+    scriptedFetch([jsonResponse({ id: "cgt-1" }), ...Array.from({ length: 5 }, () => new Response("", { status: 502 }))]);
+    const error = await rejection(runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps()));
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toMatch(/502/);
+    // Giving up on the polls says nothing about the task: it is paid for, so the
+    // error still has to name it.
+    expect((error as ApiError).taskId).toBe("cgt-1");
+  });
+
+  it("does not retry a 401 while polling", async () => {
+    const stub = scriptedFetch([jsonResponse({ id: "cgt-1" }), new Response("", { status: 401 }), new Response("", { status: 401 })]);
+    await rejection(runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps()));
+    expect(stub.calls).toHaveLength(2);   // create + one poll
+  });
+
+  it("propagates an unknown status instead of polling until the budget dies", async () => {
+    const stub = scriptedFetch([jsonResponse({ id: "cgt-1" }), jsonResponse({ status: "paused" }), jsonResponse({ status: "running" })]);
+    const error = await rejection(runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps()));
+    expect(error.message).toMatch(/paused/);
+    expect(stub.calls).toHaveLength(2);
+  });
+
+  it("sends the create to --base-url's origin when one is given", async () => {
+    const stub = scriptedFetch([jsonResponse({ id: "cgt-1" })]);
+    await runVideoGenerate("a cat", { provider: "volcengine", baseUrl: "https://proxy.example.com", noWait: true }, deps());
+    expect(stub.calls[0].url).toBe("https://proxy.example.com/api/v3/contents/generations/tasks");
+  });
+
+  it("creates nothing when the output directory cannot be made", async () => {
+    const stub = scriptedFetch([jsonResponse({ id: "cgt-1" })]);
+    // A regular file in the way makes mkdir fail with ENOTDIR on every platform.
+    const blocker = path.join(tempDir, "blocker");
+    fs.writeFileSync(blocker, "not a directory");
+    const error = await rejection(
+      runVideoGenerate("a cat", { provider: "volcengine", outDir: path.join(blocker, "out"), noWait: false }, deps()),
+    );
+    expect(error).toBeInstanceOf(UsageError);
+    expect(error.message).toContain(path.join(blocker, "out"));
+    expect(stub.calls).toHaveLength(0);
+  });
+
+  it("creates nothing when no API key can be resolved", async () => {
+    const stub = scriptedFetch([jsonResponse({ id: "cgt-1" })]);
+    const error = await rejection(
+      runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps(), {}),
+    );
+    expect(error).toBeInstanceOf(ConfigError);
+    expect(error.message).toMatch(/no API key found for provider "volcengine"/);
+    expect(stub.calls).toHaveLength(0);
+  });
+
+  it("names the task id when the finished clip cannot be saved", async () => {
+    // The task is paid for; re-running generate would pay twice, so the failure
+    // has to hand back the one thing that resumes it.
+    scriptedFetch([
+      jsonResponse({ id: "cgt-1" }),
+      jsonResponse({ status: "succeeded", content: { video_url: "https://cdn/v.mp4" } }),
+      new Response("", { status: 500 }),
+    ]);
+    const error = await rejection(runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps()));
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).taskId).toBe("cgt-1");
+    expect(error.message).toContain("cgt-1");
+    expect(error.message).toContain("status 500");
   });
 });
