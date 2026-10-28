@@ -482,6 +482,37 @@ async function sendVideoRequest(params: VideoRoundTripParams): Promise<VideoRoun
 }
 
 /**
+ * Redacts the text of an `ApiError` an adapter raised while reading a paid
+ * response, before it leaves the transport. `pollOutcome` throws for a status
+ * nobody anticipated, and that message is the raw vendor string; `video.ts`
+ * publishes it to stderr and into the JSON envelope's `message`, so a body that
+ * reflected the request's `Authorization` header would carry the key out. The
+ * type, `code`, `taskId` and `status` survive, because a retry policy classifies
+ * on those fields rather than on the text.
+ */
+function redactedApiError(error: unknown, redact: (text: string) => string): unknown {
+  if (!(error instanceof ApiError)) return error;
+
+  const message = redact(error.message);
+  const code = error.code === undefined ? undefined : redact(error.code);
+  if (message === error.message && code === error.code) return error;
+  return new ApiError(message, code, error.taskId, error.status);
+}
+
+/**
+ * Runs an adapter callback and puts any `ApiError` it raises through the same
+ * redactor every other error message passes. Anything else — a `UsageError` from
+ * `buildRequest`, a `SyntaxError` — propagates untouched.
+ */
+function redacting<T>(action: () => T, redact: (text: string) => string): T {
+  try {
+    return action();
+  } catch (error) {
+    throw redactedApiError(error, redact);
+  }
+}
+
+/**
  * Creates one async video task and returns its id. The request is built and
  * serialized before the fetch, so a request the adapter rejects never costs
  * money; the create itself is sent exactly once and never retried.
@@ -490,8 +521,11 @@ export async function createTask(
   params: CreateTaskParams,
 ): Promise<{ taskId: string; requestId?: string }> {
   const { binding, apiKey, request } = params;
+  const redact = redactorFor(apiKey);
   const adapter = getAdapter(binding.dialect, "video");
-  const payload = JSON.stringify(adapter.buildRequest(request));
+  // Built before the fetch so an rejected body costs nothing; `redacting` keeps
+  // the error's type and only rewrites the text that could hold the key.
+  const payload = redacting(() => JSON.stringify(adapter.buildRequest(request)), redact);
   const url = `${binding.provider.base_url}${binding.path ?? adapter.createPath}`;
 
   const { json, requestId } = await sendVideoRequest({
@@ -504,7 +538,7 @@ export async function createTask(
     timeoutMessage: createTimeoutMessage(binding.provider),
   });
 
-  const taskId = adapter.taskIdFrom(json);
+  const taskId = redacting(() => adapter.taskIdFrom(json), redact);
   return requestId === undefined ? { taskId } : { taskId, requestId };
 }
 
@@ -514,7 +548,8 @@ export async function createTask(
  * `failure.code` into an `ApiError`, and `ApiError.code` is published into the JSON
  * envelope, which can land on disk. A `2xx` poll body never reaches `errorForStatus`,
  * so without this a proxy that reflects the request headers would leak the key
- * through a task's own failure line.
+ * through a task's own failure line. The status the adapter *throws* for goes
+ * through `redacting` for the same reason.
  */
 function redactedOutcome(outcome: TaskOutcome, redact: (text: string) => string): TaskOutcome {
   switch (outcome.state) {
@@ -557,6 +592,7 @@ export async function pollTask(
     notFoundMessage: unknownTaskMessage(provider, taskId, hostOf(url)),
   });
 
-  const outcome = redactedOutcome(adapter.pollOutcome(json), redactorFor(apiKey));
+  const redact = redactorFor(apiKey);
+  const outcome = redactedOutcome(redacting(() => adapter.pollOutcome(json), redact), redact);
   return requestId === undefined ? outcome : { ...outcome, requestId };
 }

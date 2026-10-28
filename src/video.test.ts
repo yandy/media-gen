@@ -273,6 +273,22 @@ describe("runVideoGenerate", () => {
     expect(stub.calls.filter((c) => c.method === "POST")).toHaveLength(1);   // the paid request goes out once
   });
 
+  it("keeps the create's request id when a poll carries a different one", async () => {
+    // The create is the request that was charged, so it owns the id; preferring the
+    // poll's would silently attribute the run to a request nobody paid for.
+    scriptedFetch([
+      jsonResponse({ id: "cgt-1" }, { requestId: "req-create" }),
+      jsonResponse(
+        { status: "succeeded", content: { video_url: "https://cdn/v.mp4" } },
+        { requestId: "req-poll" },
+      ),
+      videoBytes(),
+    ]);
+    const result = await runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps());
+    expect(result.requestId).toBe("req-create");
+    expect(result.taskId).toBe("cgt-1");
+  });
+
   it("writes the task id to stderr before the first poll so an interrupt is recoverable", async () => {
     const stub = scriptedFetch([
       jsonResponse({ id: "cgt-1" }),
@@ -379,6 +395,8 @@ describe("runVideoGenerate", () => {
     const error = await rejection(runVideoGenerate("a cat", { provider: "volcengine", noWait: false }, deps()));
     expect(error).toBeInstanceOf(ApiError);
     expect(error.message).toMatch(/502/);
+    // The status survives the wrapper: it is the field a caller classifies on.
+    expect((error as ApiError).status).toBe(502);
     // Giving up on the polls says nothing about the task: it is paid for, so the
     // error still has to name it and say how to resume it.
     expect((error as ApiError).taskId).toBe("cgt-1");
@@ -421,6 +439,8 @@ describe("runVideoGenerate", () => {
     expect((error as ApiError).taskId).toBe("cgt-1");
     expect(error.message).toContain("cgt-1");
     expect(error.message).toMatch(/video status cgt-1/);
+    // The 200 the proxy answered with is carried through the wrapper too.
+    expect((error as ApiError).status).toBe(200);
     expect(stub.calls).toHaveLength(2);
     expect(stub.calls.filter((c) => c.method === "POST")).toHaveLength(1);
   });

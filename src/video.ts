@@ -432,6 +432,15 @@ function resumeHint(id: string): string {
 }
 
 /**
+ * The cause's HTTP status, carried onto a wrapped poll error: `status` is the field
+ * `errors.ts` documents for classification, so dropping it here would leave a
+ * surfaced failure unclassifiable by a later reader.
+ */
+function causeStatus(cause: unknown): number | undefined {
+  return cause instanceof ApiError ? cause.status : undefined;
+}
+
+/**
  * The budget ran out with the task still running. Not a failed task: it is paid for
  * and still going, so the wording has to make resubmitting — and paying twice — the
  * obviously wrong move, and hand back the id that resumes it.
@@ -462,6 +471,7 @@ function gaveUpPollingError(binding: TaskBinding, taskId: string, cause: unknown
       `${reason}. ${resumeHint(id)}`,
     code,
     taskId,
+    causeStatus(cause),
   );
 }
 
@@ -480,6 +490,7 @@ function stoppedPollingError(taskId: string, cause: unknown): ApiError {
     `polling task ${id} stopped before its state was known: ${reason}. ${resumeHint(id)}`,
     code,
     taskId,
+    causeStatus(cause),
   );
 }
 

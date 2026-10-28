@@ -1007,6 +1007,24 @@ describe("pollTask: one poll, read by the adapter", () => {
     expect(JSON.stringify(outcome)).not.toContain(API_KEY);
   });
 
+  it("redacts the API key out of an error the adapter throws for a poll", async () => {
+    // `pollOutcome` throws for a status nobody anticipated, and that message is the
+    // raw vendor string the pipeline publishes to stderr and into the envelope. It
+    // is the same leak as the terminal-outcome case above, one field over.
+    stubVideoFetch(jsonResponse({ status: `paused-${API_KEY}` }));
+
+    const error = await rejection(
+      pollTask({ binding: arkBinding(), apiKey: API_KEY, taskId: "cgt-1" }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toMatch(/unknown status/);
+    expect(error.message).not.toContain(API_KEY);
+    expect(error.message).toContain("[redacted]");
+    // The adapter raised it, so it stays terminal for the retry policy.
+    expect((error as ApiError).status).toBeUndefined();
+  });
+
   it("uses the plain timeout wording for a poll, which is not paid for", async () => {
     stubVideoFetch(timeoutRejection());
 
