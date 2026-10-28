@@ -215,8 +215,6 @@ export type TaskOutcome =
 export interface AsyncTaskAdapter {
   createPath: string;
   buildRequest(req: VideoRequest): unknown;
-  /** 额外请求头；两个方言都不需要，dashscope 将来（若复活）要 X-DashScope-Async。 */
-  buildHeaders?(): Record<string, string>;
   /** ark: json.id；minimax: json.task_id。 */
   taskIdFrom(json: unknown): string;
   /** ark: {createPath}/{id}；minimax: 另一个前缀，所以这是函数而不是后缀规则。 */
@@ -237,7 +235,6 @@ export type DialectAdapters = {
 ```
 
 `getAdapter` 用重载保持调用点不变：
-
 ```ts
 export function getAdapter(apiType: Dialect, task: "image"): TaskAdapter;
 export function getAdapter(apiType: Dialect, task: "video"): AsyncTaskAdapter;
@@ -245,7 +242,13 @@ export function getAdapter(apiType: Dialect, task: "video"): AsyncTaskAdapter;
 export function getAdapter(apiType: Dialect, task: Task): TaskAdapter | AsyncTaskAdapter;
 ```
 
-第三条重载是必需的，不是便利：`resolveSelection()` 与 `callApi()` 传的是 `Task` 变量。
+第三条重载是必需的，不是便利：`resolveSelection()` 与 `callApi()` 传的是 `Task` 变量，
+没有它就得在调用点断言。
+
+**刻意没有 `buildHeaders?()`**：本期两个方言都只要 `Authorization: Bearer`，加一个没有方言
+实现的可选钩子就是没人调用的死代码（而且它无法被测试——适配器来自注册表，没法注入）。
+第一个需要额外头的方言（dashscope 若复活，或 MiniMax 未来的 Context-IR 端点）落地时再加，
+那时它自然有实现也有测试。
 
 ### 4.2 视频的请求模型
 
@@ -322,7 +325,7 @@ export async function pollTask(params: {binding; apiKey; taskId}): Promise<TaskO
   `AbortSignal`；一个挂住不返回的请求不能吃掉整个预算）、`binding.timeout_ms`
   （默认 1800s，**只**做轮询总预算记账）、下载超时（图像 120s / 视频 600s，独立、
   不计入预算——成片 URL 24 小时有效，1799s 才出片不该因下载慢而被报成「已付费未出片」）。
-- `Authorization: Bearer` + 适配器的 `buildHeaders()`；轮询也要带同样的头。
+- `Authorization: Bearer`；两个方言都不需要额外的头，所以本期不设 `buildHeaders()`（§4.1）。
 - 非 2xx 走与图像完全相同的 `errorForStatus`（`parseErrorBody` 钩子已在用）。
 
 ### 4.5 命令面
@@ -648,7 +651,7 @@ mediagen video status <上一步打印的 task_id> --provider <上一步的 prov
    （「建了任务、还在跑」是 `ok: true, files: []`）。这是与图像信封的**刻意差异**。
 8. **`video status` 的文件名会写错 model**（§4.9）。改为优先用服务端回显的 `model`。
 
-另有两处内部不一致当轮改掉：`getAdapter` 需要第三个「传变量」的重载（§4.1）；
+另有两处内部不一致当轮改掉：`getAdapter` 需要第三个「传变量」的重载（§4.1）；`buildHeaders?()` 从接口里拿掉（没有方言实现它，就是死代码）；
 「现有测试零改动」是过强的说法，已逐条列出必须反转的断言与种子改名会打到的字面量。
 
 ### 第二轮（范围变更，2026-10-28）
