@@ -135,6 +135,12 @@ export type TaskOutcome =
  * of the registry, next to `TaskAdapter` rather than folded into it.
  */
 export interface AsyncTaskAdapter {
+  /**
+   * The dialect this adapter speaks (`"ark"`), so a flag this dialect does not
+   * accept can be reported by name. Not narrowed to `Dialect`: the union grows
+   * as dialects land, and the adapter is the authority for what it speaks.
+   */
+  dialect: string;
   createPath: string;
   buildRequest(req: VideoRequest): unknown;
   /** The dialects disagree on the field name, so every one reads its own. */

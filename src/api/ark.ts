@@ -286,6 +286,7 @@ export function arkPollOutcome(json: unknown): TaskOutcome {
 }
 
 export const ArkVideoDialect: AsyncTaskAdapter = {
+  dialect: "ark",
   createPath: ARK_VIDEO_TASKS_PATH,
   buildRequest: buildArkVideoRequest,
   taskIdFrom: taskIdFromArk,
