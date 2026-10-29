@@ -1939,5 +1939,12 @@ describe("video generate", () => {
     // command that is added by a later task.
     expect(help).not.toContain("MiniMax");
     expect(help).not.toContain("video status");
+
+    // The root help is where someone decides whether to run this at all, so the
+    // fact that creating a task is what costs money belongs there too.
+    const root = (await run(["--help"])).stdout;
+    expect(root).toContain("video generate");
+    expect(root).toContain("pay for a video task");
+    expect(root).toContain("mediagen video generate --help");
   });
 });

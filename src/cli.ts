@@ -184,12 +184,14 @@ Subcommands:
   config show       the resolved configuration, with a source note for each value
   config path       where config.toml lives
   config add        create a provider in config.toml (edit the file for anything else)
+  video generate    create and pay for a video task, then save the result
 
 Exit codes: 0 success — including a partial image success that saved at least one
 file, or a video task that was created and is still running; 1 an
 API/config/runtime failure, 2 a usage error.
 
-Run "mediagen image generate --help" for the flag list, the model table and examples.`;
+Run "mediagen image generate --help" or "mediagen video generate --help" for the flag
+list, the model table and examples.`;
 
 /** Shared body of the `image generate` / `image edit` help; examples match the command. */
 function imageHelpText(command: "generate" | "edit"): string {
