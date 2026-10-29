@@ -341,8 +341,10 @@ function withTaskId(cause: unknown, taskId: string): ApiError {
   if (cause instanceof ApiError && cause.taskId !== undefined) return cause;
   const reason = cause instanceof Error ? cause.message : String(cause);
   const code = cause instanceof ApiError ? cause.code : undefined;
+  // The 404 message already names the task; repeating it there reads like a stutter.
+  const alreadyNamed = reason.includes(safeLine(taskId));
   return new ApiError(
-    `${reason} (task ${safeLine(taskId)})`,
+    alreadyNamed ? reason : `${reason} (task ${safeLine(taskId)})`,
     code,
     taskId,
     causeStatus(cause),
@@ -351,7 +353,7 @@ function withTaskId(cause: unknown, taskId: string): ApiError {
 
 /**
  * One look at a task that was created earlier — the way back into a paid task whose
- * run was interrupted, and the only command that does not create anything.
+ * run was interrupted. It creates nothing.
  *
  * It polls exactly once and never loops: waiting is the caller's decision, so a
  * `running` answer is a normal result (exit 0) rather than a reason to block. No

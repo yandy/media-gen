@@ -2027,5 +2027,8 @@ describe("video status", () => {
 
     expect(help).toContain("asks once");
     expect(help).toContain("nothing is billed");
+    // Both claims were wrong once; pin the corrected wording.
+    expect(help).toContain("the only one that cannot spend money");
+    expect(help).toContain("is not sent");
   });
 });

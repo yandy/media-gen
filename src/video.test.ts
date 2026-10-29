@@ -539,6 +539,7 @@ describe("runVideoStatus", () => {
 
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).taskId).toBe("cgt-1");
+    expect((error as ApiError).status).toBe(502);
     expect(error.message).toMatch(/502/);
     expect(stub.calls).toHaveLength(1);
   });

@@ -421,8 +421,8 @@ with the vendor's own message.
 
 Flags not passed here are taken from config.toml: the provider from default_provider, the
 model from that provider's video table. The provider picks the account and the endpoint;
---model is only checked against config.toml and is not sent, because the task id decides
-everything else.
+--model is checked against config.toml and is not sent, because the task id decides
+everything else (it is only a fallback for the file name if the server reports no model).
 
 Examples:
   mediagen video status cgt-20261028-abcd --provider volcengine
