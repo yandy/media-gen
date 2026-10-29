@@ -519,7 +519,7 @@ export function createProgram(options: ProgramOptions = {}): Command {
   config
     .command("add <name>")
     .description("Create a [providers.<name>] table in config.toml")
-    .option("--api-type <dialect>", "protocol dialect: openai, dashscope or ark")
+    .option("--api-type <dialect>", "protocol dialect: openai, dashscope, ark or minimax")
     .option("--base-url <url>", "the provider's origin, e.g. https://ark.cn-beijing.volces.com")
     .option("--task <image|video>", "which task table to create (default: image)")
     .option("--model <id>", "the model id this task defaults to")
@@ -1132,7 +1132,7 @@ function runConfigShow(flags: { json?: boolean }): void {
 
   if (views.length === 0) {
     lines.push(
-      "  (none; run \"mediagen config add <name> --api-type <openai|dashscope|ark> --base-url <origin> --model <id>\")",
+      "  (none; run \"mediagen config add <name> --api-type <openai|dashscope|ark|minimax> --base-url <origin> --model <id>\")",
     );
   }
 

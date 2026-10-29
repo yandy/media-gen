@@ -888,6 +888,16 @@ describe("createTask: the async video task is created exactly once", () => {
 });
 
 describe("pollTask: one poll, read by the adapter", () => {
+  it("asks minimax for the task under its own prefix", async () => {
+    const stub = stubVideoFetch(jsonResponse({ task: { status: "running" } }));
+
+    await pollTask({ binding: minimaxBinding(), apiKey: "sk-x", taskId: "abc" });
+
+    // ark's poll path is its create path plus "/{id}", so only this dialect can prove
+    // that the transport consults pollPath() instead of appending a suffix.
+    expect(stub.calls[0].url).toBe("https://api.minimax.io/v2/query/video_generation/abc");
+  });
+
   it("polls the adapter's own poll path with a GET", async () => {
     const stub = stubVideoFetch(jsonResponse({ status: "running" }));
 

@@ -139,15 +139,17 @@ function firstFrame(images: readonly string[]): string | undefined {
 /**
  * The optional request fields that are dialect-specific rather than shared. Every
  * dialect must declare the ones it accepts; the rest are rejected locally, so a flag
- * from another vendor fails before the request instead of being silently dropped.
+ * from another vendor fails before the request instead of being silently paid for.
  *
- * Adding a dialect means adding its own names here, never assuming the list is complete
- * by accident — an unlisted name escapes this check entirely.
+ * This list must name every such field: an unlisted one escapes the check entirely and
+ * is dropped on the floor by any dialect that does not serialize it. `seed` was exactly
+ * that — accepted, validated, and never sent to minimax.
  */
 const DIALECT_SPECIFIC_FIELDS = [
   { option: "generateAudio", field: "generate_audio", flag: "--generate-audio" },
   { option: "outputFormat", field: "output_format", flag: "--output-format" },
   { option: "watermark", field: "watermark", flag: "--watermark" },
+  { option: "seed", field: "seed", flag: "--seed" },
 ] as const;
 
 function rejectUndeclaredFlags(opts: VideoOptions, adapter: AsyncTaskAdapter): void {

@@ -460,6 +460,7 @@ describe("ark video task id and polling", () => {
       "generate_audio",
       "output_format",
       "watermark",
+      "seed",
     ]);
     expect(ArkVideoDialect.createPath).toBe("/api/v3/contents/generations/tasks");
   });

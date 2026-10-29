@@ -6,7 +6,7 @@ import { ArkVideoDialect } from "./api/ark.js";
 import { MinimaxVideoDialect } from "./api/minimax.js";
 import { writeConfigFile } from "./config.js";
 import { ApiError, ConfigError, UsageError } from "./errors.js";
-import type { AsyncTaskAdapter, VideoDeps } from "./types.js";
+import type { VideoDeps } from "./types.js";
 import {
   buildVideoRequest,
   runVideoGenerate,
@@ -218,6 +218,15 @@ describe("buildVideoRequest", () => {
     expect(buildVideoRequest("p", { watermark: true, noWait: false }, "m", arkAdapter).watermark).toBe(
       true,
     );
+  });
+
+  it("rejects seed on a dialect that does not take one", () => {
+    // Without this, --seed would be accepted, validated and never sent: the user pays
+    // twice for two runs they believe differ.
+    expect(() => buildVideoRequest("p", { seed: 42, noWait: false }, "m", minimaxAdapter)).toThrow(
+      /"seed".*minimax/,
+    );
+    expect(buildVideoRequest("p", { seed: 42, noWait: false }, "m", arkAdapter).seed).toBe(42);
   });
 
   it("keeps a dialect's own exclusive flag on the dialect that declares it", () => {

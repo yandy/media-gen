@@ -70,11 +70,10 @@ describe("minimax video request", () => {
   it.each(rejected)("rejects %s, which this dialect does not accept", (field, extra) => {
     const error = thrownBy(() => buildMinimaxVideoRequest({ model: "m", prompt: "p", ...extra }));
 
-      expect(error).toBeInstanceOf(UsageError);
-      expect(error.message).toContain(field);
-      expect(error.message).toContain("minimax");
-    },
-  );
+    expect(error).toBeInstanceOf(UsageError);
+    expect(error.message).toContain(field);
+    expect(error.message).toContain("minimax");
+  });
 });
 
 describe("minimax task id and polling", () => {
@@ -134,8 +133,19 @@ describe("minimax task id and polling", () => {
     });
   });
 
-  it("reports a cancelled task", () => {
-    expect(minimaxPollOutcome({ task: { status: "cancelled" } }).state).toBe("cancelled");
+  it("names the state when a task ends without a vendor message", () => {
+    // "cancelled: minimax video task failed" would read as a contradiction.
+    expect(minimaxPollOutcome({ task: { status: "cancelled" } })).toEqual({
+      state: "cancelled",
+      failure: { message: "minimax task cancelled" },
+    });
+    expect(minimaxPollOutcome({ task: { status: "failed" } })).toEqual({
+      state: "failed",
+      failure: { message: "minimax task failed" },
+    });
+    expect(
+      minimaxPollOutcome({ task: { status: "failed", error: { type: "server_error", message: "  " } } }),
+    ).toEqual({ state: "failed", failure: { code: "server_error", message: "minimax task failed" } });
   });
 
   it("rejects a succeeded task without a url, an unknown status, and a missing task", () => {

@@ -17,7 +17,11 @@ import type {
  * names — which is what makes one internal request model serve both.
  */
 
-/** Fields this dialect does not accept, enforced again inside buildRequest(). */
+/**
+ * Fields this dialect does not accept, rejected here as well as by the validator. The
+ * registry already expresses the policy (`exclusiveFields: []`); this list is the
+ * direct-call guard, so the two must agree.
+ */
 const UNSUPPORTED_FIELDS = ["watermark", "generate_audio", "output_format"] as const satisfies readonly (
   | keyof VideoRequest
 )[];
@@ -85,16 +89,20 @@ export function minimaxPollPath(id: string): string {
   return `/v2/query/video_generation/${encodeURIComponent(id)}`;
 }
 
-function minimaxFailure(error: unknown): { code?: string; message: string } {
+function minimaxFailure(
+  status: string,
+  error: unknown,
+): { code?: string; message: string } {
+  const fallback = `minimax task ${status}`;
   if (isRecord(error)) {
     const message =
-      typeof error.message === "string" && error.message.trim() !== ""
-        ? error.message
-        : "minimax video task failed";
+      typeof error.message === "string" && error.message.trim() !== "" ? error.message : fallback;
     const code = typeof error.type === "string" && error.type !== "" ? error.type : undefined;
     return code === undefined ? { message } : { code, message };
   }
-  return { message: "minimax video task failed" };
+  // The engine prefixes the state, so the fallback names it to avoid "cancelled:
+  // minimax task failed", which reads as a contradiction.
+  return { message: fallback };
 }
 
 /**
@@ -127,8 +135,8 @@ export function minimaxPollOutcome(json: unknown): TaskOutcome {
     return { state: "succeeded", result };
   }
 
-  if (status === "failed") return { state: "failed", failure: minimaxFailure(task.error) };
-  if (status === "cancelled") return { state: "cancelled", failure: minimaxFailure(task.error) };
+  if (status === "failed") return { state: "failed", failure: minimaxFailure(status, task.error) };
+  if (status === "cancelled") return { state: "cancelled", failure: minimaxFailure(status, task.error) };
 
   // A status nobody anticipated must fail loudly: treating it as "still running" would
   // burn the whole poll budget on a paid task while the answer never changes.

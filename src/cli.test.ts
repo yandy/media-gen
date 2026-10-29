@@ -2051,6 +2051,10 @@ describe("the minimax dialect in config and on the video command", () => {
 
     const shown = await run(["config", "show"]);
     expect(shown.stdout).toContain("endpoint: https://api.minimax.io/v2/video_generation");
+
+    // `config add --help` is where a user learns minimax is a legal value.
+    const help = (await run(["config", "add", "--help"])).stdout;
+    expect(help).toContain("minimax");
   });
 
   it("points at --provider when a minimax provider is asked for another host's task", async () => {

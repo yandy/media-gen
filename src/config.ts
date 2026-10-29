@@ -203,15 +203,18 @@ export function vendorPathIssue(value: string): OriginIssue | undefined {
 
 /**
  * What a `path` override should say when base_url already carries a prefix: the
- * adapter's path minus the vendor's own `<api>/<version>` root (two segments in
- * every dialect, `/api/v3`, `/compatible-mode/v1`). Only ever used to suggest a
- * value in an error message; the request itself still uses `createPath`.
+ * adapter's path minus the vendor's own API root — two segments for the Alibaba and
+ * Volcengine dialects (`/api/v3`, `/compatible-mode/v1`) and one for minimax (`/v2`).
+ * Only ever used to suggest a value in an error message; the request itself still uses
+ * `createPath`.
  */
 function pathAfterVendorRoot(createPath: string | undefined): string | undefined {
   if (createPath === undefined) return undefined;
   const segments = createPath.split("/");
-  if (segments.length < 5) return undefined;
-  return `/${segments.slice(3).join("/")}`;
+  // ["", "api", "v3", ...] → two-segment root; ["", "v2", ...] → one-segment root.
+  const rootSegments = segments.length >= 5 ? 3 : segments.length >= 3 ? 2 : 0;
+  if (rootSegments === 0) return undefined;
+  return `/${segments.slice(rootSegments).join("/")}`;
 }
 
 function isVendorHost(hostname: string): boolean {
