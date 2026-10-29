@@ -136,9 +136,6 @@ function firstFrame(images: readonly string[]): string | undefined {
  * rather than being ignored by the create endpoint after it charged. The wording
  * mirrors the image path's message for the same mistake.
  *
- * This list must name every such field. Every dialect declares the ones it accepts;
- * the rest are rejected locally.
- *
  * This list must name every such field: an unlisted one escapes the check entirely and
  * is dropped on the floor by any dialect that does not serialize it. `seed` was exactly
  * that — accepted, validated, and never sent to minimax.
@@ -530,7 +527,10 @@ async function waitForTask(
  * because it could not read the body.
  */
 function isTransientPollFailure(error: unknown): boolean {
-  if (!(error instanceof ApiError)) return true;
+  // Every transport failure is wrapped as an ApiError with NO_RESPONSE_STATUS, so a
+  // non-ApiError here is a defect in this codebase: retrying it would hide the bug
+  // behind five attempts and report it as a paid task.
+  if (!(error instanceof ApiError)) return false;
   const status = error.status;
   // No status means the adapter rejected the body, not the transport: an unknown
   // task status must surface at once instead of being polled until the budget dies.

@@ -1076,8 +1076,8 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
       : `set ${shellArg(apiKeyEnv)}, or run "${loginHint}"`;
   if (adapterPath(dialect, task) === undefined) {
     writeErrLine(
-      `note: the "${dialect}" dialect has no "${task}" adapter yet; the table is stored ` +
-        `and "config show" will mark it until it lands`,
+      `note: the "${dialect}" dialect has no "${task}" task; the table is stored, and ` +
+        `"config show" will say the same`,
     );
   }
 

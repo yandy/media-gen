@@ -135,6 +135,14 @@ export function inferExtension(
   kind: MediaKind = "image",
 ): string {
   if (kind === "video") {
+    // The vendor's own word for the container outranks the URL: ark reports
+    // `output_format: "mov"` while the clip URL carries no suffix, and naming an mov
+    // `.mp4` would be a lie about the bytes in the file.
+    const declared = "format" in result ? result.format?.trim().toLowerCase() : undefined;
+    if (declared !== undefined && SAFE_EXTENSION.test(declared) && KNOWN_VIDEO_EXTENSIONS.has(declared)) {
+      return declared;
+    }
+
     const fromVideoUrl = extensionFromUrl(result.url, KNOWN_VIDEO_EXTENSIONS);
     if (fromVideoUrl !== undefined) return fromVideoUrl;
 

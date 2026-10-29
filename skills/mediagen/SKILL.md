@@ -139,7 +139,9 @@ mediagen video status <task-id> --json
 the only handle on it, and re-running the command pays twice for the same clip.
 
 `video status` asks once and never waits: `status: "pending"`/`"running"` is a normal
-answer (exit 0, `files: []`), so poll it on your own schedule. When it reports
+answer (exit 0, `files: []`), so poll it on your own schedule. Note that `--no-wait`
+reports `status: "pending"` as an assumption — it never asked — so treat that field as
+"unknown" until a `video status` call answers. When it reports
 `succeeded` it downloads the clip and prints the path.
 
 Video models: `doubao-seedance-1-0-pro-250528` on `--provider volcengine`, or
@@ -179,5 +181,5 @@ Boolean flags take an explicit value: `--watermark false`, not `--no-watermark`.
 2. Never re-run a request that already produced files, and never re-submit a video
    task whose id you have; retry only a clean failure that produced no task at all.
 3. Never print an API key, and never invent flags: everything supported is
-   listed by `mediagen image generate --help` (flags, sizes, vendor-specific
-   options, examples) and `mediagen image edit --help`.
+   listed by `mediagen image generate --help`, `mediagen image edit --help`, and
+   `mediagen video generate --help` (flags, sizes, vendor-specific options, examples).

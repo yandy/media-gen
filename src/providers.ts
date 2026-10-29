@@ -61,7 +61,7 @@ api_key_env = "MINIMAX_API_KEY"
 [providers.minimax.video]
 api_type = "minimax"
 default  = "MiniMax-H3"
-models   = ["MiniMax-H3", "MiniMax-H3-Max"]   # -Max trades 2K for speed; 480P/768P only
+models   = ["MiniMax-H3", "MiniMax-H3-Max"]   # -Max: 480P/768P only, 5s minimum
 
 # A gateway that serves DashScope's native protocol on its own path:
 # [providers.my-gateway]

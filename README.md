@@ -40,8 +40,9 @@ Node >= 18, two runtime dependencies, a DashScope and/or Ark API key.
 | `mediagen config show` / `config path` | resolved config, and where it lives |
 | `mediagen config add <name>` | create a provider in config.toml; everything else is a manual edit |
 
-`mediagen image generate --help` is the reference: every flag, the model table, the
-size reference, examples. Everything below is the short version.
+`mediagen image generate --help` and `mediagen video generate --help` are the
+reference: every flag, the model table, the size reference, examples. Everything below
+is the short version.
 
 ## Models and flags
 
@@ -58,8 +59,8 @@ size reference, examples. Everything below is the short version.
 
 `aliyun`, `volcengine` and `minimax` are the provider names the first run writes into
 `config.toml`; rename them freely. A model is usable only if it is listed in
-`models = [...]` under that provider's `image` table, and a second model of the same
-vendor is one more entry there — never another provider. Ids are dated snapshots, so
+`models = [...]` under that provider's table for the task (`image` or `video`), and a
+second model of the same vendor is one more entry there — never another provider. Ids are dated snapshots, so
 edit `models` (and `default`) in `config.toml` as they roll forward.
 
 ### Protocols
@@ -232,7 +233,9 @@ publicly. A `base_url` that still contains `<...>` is rejected before spending a
 tasks, their models, and the endpoint each one would actually hit. Set
 `NODE_USE_ENV_PROXY=1` on Node >= 24 to honour `HTTP_PROXY`. Timeouts: per request
 `timeout_seconds` for the task (default 300 s, video 1800 s), 120 s per image
-download and 600 s per video download.
+download and 600 s per video download. For video that budget is the *whole* poll
+window, not one request: each create or poll gets 60 s, so a hung request cannot eat
+the budget, and the download has its own 600 s and is not counted against it.
 
 Working from an agent? `skills/mediagen/SKILL.md` says when to reach for this CLI.
 

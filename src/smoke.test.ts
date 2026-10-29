@@ -156,6 +156,38 @@ function stubFetch(
   return calls;
 }
 
+/**
+ * A scripted video backend: create, then polls, then the clip itself. An exhausted
+ * script answers 400 rather than repeating, so an extra request fails loudly instead of
+ * letting a poll loop sleep through the whole budget.
+ */
+function stubVideo(responses: Response[]): StubCall[] {
+  const calls: StubCall[] = [];
+  const queue = [...responses];
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({
+        url,
+        method: init?.method ?? "GET",
+        headers: (init?.headers ?? {}) as Record<string, string>,
+        body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+      });
+      const next = queue.shift();
+      return (
+        next ??
+        new Response(JSON.stringify({ error: { code: "Exhausted", message: "script done" } }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        })
+      );
+    }),
+  );
+
+  return calls;
+}
+
 function apiOk(data: unknown[], usage: Record<string, unknown>): Response {
   return new Response(JSON.stringify({ created: 1_700_000_000, data, usage }), {
     status: 200,
@@ -352,3 +384,54 @@ describe("smoke: the seeded config", () => {
     expect(fs.readdirSync(seededOut)).toHaveLength(1);
   });
 });
+
+describe("smoke: video through the real CLI", () => {
+  // Start from no config.toml so main() writes the real seed, which is what this test
+  // is about: the shipped `minimax` entry must work as written.
+  beforeEach(() => {
+    fs.rmSync(path.join(configDir, "config.toml"), { force: true });
+  });
+
+  it("runs a minimax task from the seeded config to a file on disk", async () => {
+    // The whole stack for the second dialect: main() → resolveSelection → the minimax
+    // adapter → the transport → the downloader.
+    const calls = stubVideo([
+      new Response(JSON.stringify({ task_id: "cgt-mm-1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      new Response(
+        JSON.stringify({
+          task: {
+            status: "succeeded",
+            model: "MiniMax-H3",
+            content: { url: "https://cdn.example.com/clip.mp4" },
+            duration: 5,
+            resolution: "768P",
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+      new Response(Buffer.from("\x00\x00\x00\x18ftypmp42"), {
+        status: 200,
+        headers: { "content-type": "video/mp4" },
+      }),
+    ]);
+
+    const code = await main([
+      "video", "generate", "a fox in snow",
+      "--provider", "minimax", "--api-key", "sk-smoke-minimax", "--out-dir", outDir,
+    ]);
+
+    expect(code).toBe(0);
+    const written = fs.readdirSync(outDir);
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatch(/^minimax-minimax-h3-.*-0\.mp4$/);
+    expect(calls[0]).toMatchObject({ url: "https://api.minimax.io/v2/video_generation", method: "POST" });
+    expect(calls[1]).toMatchObject({
+      url: "https://api.minimax.io/v2/query/video_generation/cgt-mm-1",
+      method: "GET",
+    });
+  });
+});
+

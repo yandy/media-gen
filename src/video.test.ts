@@ -52,6 +52,17 @@ function configText(videoTimeoutSeconds?: number): string {
     'models = ["doubao-seedance-2-5-260628"]',
     ...(videoTimeoutSeconds === undefined ? [] : [`timeout_seconds = ${videoTimeoutSeconds}`]),
     "",
+    // The same fixture serves the minimax pipeline: its own host, key and create path.
+    "[providers.minimax]",
+    'base_url = "https://api.minimax.io"',
+    'api_key_env = "MINIMAX_API_KEY"',
+    "",
+    "[providers.minimax.video]",
+    'api_type = "minimax"',
+    'default = "MiniMax-H3"',
+    'models = ["MiniMax-H3"]',
+    ...(videoTimeoutSeconds === undefined ? [] : [`timeout_seconds = ${videoTimeoutSeconds}`]),
+    "",
   ].join("\n");
 }
 
@@ -63,6 +74,7 @@ beforeEach(() => {
   process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(tempDir, "config");
   process.env.MEDIAGEN_CLI_STATE_DIR = path.join(tempDir, "state");
   process.env.ARK_API_KEY = ARK_KEY;
+  process.env.MINIMAX_API_KEY = "sk-test-minimax-key-0123456789";
   writeConfigFile(configText());
 });
 
@@ -227,6 +239,32 @@ describe("buildVideoRequest", () => {
       /"seed".*minimax/,
     );
     expect(buildVideoRequest("p", { seed: 42, noWait: false }, "m", arkAdapter).seed).toBe(42);
+  });
+
+  it("declares exactly the fields its buildRequest actually serializes", () => {
+    // `seed` escaped this once: the gate never asked about it, so it was validated and
+    // then dropped. The two lists must agree for every dialect-specific field.
+    const adapters = [arkAdapter, minimaxAdapter];
+    const fields = ["generate_audio", "output_format", "watermark", "seed"] as const;
+
+    for (const adapter of adapters) {
+      for (const field of fields) {
+        let serialized = false;
+        try {
+          const body = adapter.buildRequest({ model: "m", prompt: "p", [field]: field === "seed" ? 1 : field === "generate_audio" || field === "watermark" ? true : "mov" } as never);
+          serialized = body !== null && typeof body === "object" && field in (body as Record<string, unknown>);
+        } catch {
+          serialized = false;
+        }
+        const declared = (adapter.exclusiveFields ?? []).includes(field);
+        expect({ dialect: adapter.dialect, field, declared, serialized }).toEqual({
+          dialect: adapter.dialect,
+          field,
+          declared,
+          serialized: declared,
+        });
+      }
+    }
   });
 
   it("keeps a dialect's own exclusive flag on the dialect that declares it", () => {
@@ -581,3 +619,78 @@ describe("runVideoStatus", () => {
     expect(error.message).toMatch(/--provider/);
   });
 });
+
+/**
+ * The same pipeline through the other dialect. Everything ark-specific about the wire
+ * (top-level `id`, `content.video_url`) differs here (`task_id`, `task.content.url`),
+ * so this is the test that proves the seam is a seam and not an ark-shaped hole.
+ */
+describe("runVideoGenerate over the minimax dialect", () => {
+  const MINIMAX_CREATE_URL = "https://api.minimax.io/v2/video_generation";
+  const MINIMAX_POLL_URL = "https://api.minimax.io/v2/query/video_generation/cgt-mm-1";
+
+  it("creates, polls and downloads through the nested minimax envelope", async () => {
+    const stub = scriptedFetch([
+      jsonResponse({ task_id: "cgt-mm-1" }),
+      jsonResponse({ task: { status: "queued" } }),
+      jsonResponse({
+        task: {
+          status: "succeeded",
+          model: "MiniMax-H3",
+          content: { url: "https://cdn/v.mp4" },
+          duration: 5,
+          resolution: "768P",
+        },
+      }),
+      videoBytes(),
+    ]);
+
+    const result = await runVideoGenerate(
+      "a cat",
+      { provider: "minimax", noWait: false },
+      deps(),
+      { MINIMAX_API_KEY: "sk-mm-1" },
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(result.saved).toHaveLength(1);
+    expect(path.basename(result.saved[0].path)).toMatch(/^minimax-minimax-h3-.*-0\.mp4$/);
+    expect(stub.calls[0]).toMatchObject({ url: MINIMAX_CREATE_URL, method: "POST" });
+    expect(stub.calls[1]).toMatchObject({ url: MINIMAX_POLL_URL, method: "GET" });
+    // The create body filled the two fields this vendor requires and defaulted neither
+    // silently: 768P and 5 s are the adapter's documented defaults.
+    expect(stub.calls[0].body).toMatchObject({ resolution: "768P", duration: 5 });
+  });
+
+  it("stops at the budget with the task id, exactly like ark", async () => {
+    const stub = scriptedFetch([jsonResponse({ task_id: "cgt-mm-1" }), jsonResponse({ task: { status: "running" } })]);
+
+    const error = await rejection(
+      runVideoGenerate(
+        "a cat",
+        { provider: "minimax", noWait: false },
+        deps({ step: 16 * 60_000 }),
+        { MINIMAX_API_KEY: "sk-mm-1" },
+      ),
+    );
+
+    expect((error as ApiError).code).toBe("TaskNotFinished");
+    expect((error as ApiError).taskId).toBe("cgt-mm-1");
+    expect(stub.calls.filter((call) => call.method === "POST")).toHaveLength(1);
+  });
+
+  it("returns the task id without polling under --no-wait", async () => {
+    const stub = scriptedFetch([jsonResponse({ task_id: "cgt-mm-1" })]);
+
+    const result = await runVideoGenerate(
+      "a cat",
+      { provider: "minimax", noWait: true },
+      deps(),
+      { MINIMAX_API_KEY: "sk-mm-1" },
+    );
+
+    expect(result).toMatchObject({ taskId: "cgt-mm-1", status: "pending", saved: [] });
+    expect(stub.calls).toHaveLength(1);
+  });
+});
+

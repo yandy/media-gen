@@ -39,8 +39,8 @@ Node >= 18，两个运行时依赖，需要 DashScope 和/或方舟的 API key�
 | `mediagen config show` / `config path` | 解析后的配置，以及它存在哪里 |
 | `mediagen config add <name>` | 在 config.toml 里新建一条 provider（其余修改手写文件） |
 
-`mediagen image generate --help` 才是参考手册：全部参数、模型表、尺寸表、示例。
-下面只是简化版。
+`mediagen image generate --help` 与 `mediagen video generate --help` 才是参考手册：
+全部参数、模型表、尺寸表、示例。下面只是简化版。
 
 ## 模型与参数
 
@@ -210,7 +210,9 @@ OpenAI 兼容端点（`compatible-mode`）只在业务空间专属域名上提�
 的占位符；而 `dashscope` 协议所用的百炼原生端点，公共域名同样可用。`mediagen config show`
 会打印每个 provider 的任务、模型，以及各自实际会请求的 endpoint。Node >= 24 上设
 `NODE_USE_ENV_PROXY=1` 可走 `HTTP_PROXY`。超时：每次请求取该任务的 `timeout_seconds`
-（默认图片 300 秒、视频 1800 秒），每次图片下载 120 秒、视频下载 600 秒。
+（默认图片 300 秒、视频 1800 秒），每次图片下载 120 秒、视频下载 600 秒。对视频来说，
+`timeout_seconds` 是**整个轮询窗口**，不是单次请求：建任务与每次轮询各自 60 秒，这样一个挂住
+的请求吃不掉预算；下载另有 600 秒，不计入预算。
 
 在 Agent 里用？`skills/mediagen/SKILL.md` 说明什么时候该用这个 CLI。
 

@@ -1721,9 +1721,9 @@ models = ["m"]
     expect(result.stderr).not.toContain('no "video" adapter');
   });
 
-  it("warns that a video table cannot be used yet", async () => {
+  it("says a dialect has no such task, without promising one later", async () => {
     // adapterPath() misses for dashscope video, so the note branch is still live
-    // even now that ark has a video adapter.
+    // even now that the other two dialects have video adapters.
     const result = await run([
       "config", "add", "ds-vid",
       "--api-type", "dashscope",
@@ -1734,8 +1734,8 @@ models = ["m"]
 
     expect(result.code).toBe(0);
     expect(result.stderr).toContain(
-      'note: the "dashscope" dialect has no "video" adapter yet; the table is stored ' +
-        'and "config show" will mark it until it lands',
+      'note: the "dashscope" dialect has no "video" task; the table is stored, and ' +
+        '"config show" will say the same',
     );
   });
 

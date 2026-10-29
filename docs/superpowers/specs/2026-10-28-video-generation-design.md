@@ -246,6 +246,10 @@ export function getAdapter(apiType: Dialect, task: Task): TaskAdapter | AsyncTas
 第三条重载是必需的，不是便利：`resolveSelection()` 与 `callApi()` 传的是 `Task` 变量，
 没有它就得在调用点断言。
 
+`exclusiveFields` 的语义是「**这个方言接受**的方言专属字段」，不是「它拒绝的」。校验层
+持有一份方言专属字段全集，逐项检查「用户设了它，而这个方言没声明接受」——方向写反会让
+minimax 反而「声明」接受 ark 的 flag。全集不完整就会静默丢字段：`seed` 就这么掉过一次。
+
 **刻意没有 `buildHeaders?()`**：本期两个方言都只要 `Authorization: Bearer`，加一个没有方言
 实现的可选钩子就是没人调用的死代码（而且它无法被测试——适配器来自注册表，没法注入）。
 第一个需要额外头的方言（dashscope 若复活，或 MiniMax 未来的 Context-IR 端点）落地时再加，
@@ -396,7 +400,7 @@ pollOutcome(json) → queued|running → pending/running；
                     failed → failure 来自 json.error；cancelled、expired 各给一条点名的文案；
                     其他/缺失状态、succeeded 但无 video_url → ApiError
 resolutions: ["480p","720p","1080p","4k"]
-exclusiveFields: ["generate_audio","output_format"]
+exclusiveFields: ["generate_audio","output_format","watermark","seed"]   // 这四项只有 ark 收
 parseErrorBody: 不实现（`{error:{code,message}}` 走 http.ts 现有回落）
 ```
 
@@ -419,7 +423,7 @@ pollOutcome(json) → task.status：queued|running → pending/running；
                     failed → failure 来自 task.error；cancelled → 点名的 cancelled 文案；
                     其他/缺失状态、succeeded 但无 task.content.url → ApiError
 resolutions: ["480p","768p","2k"]
-exclusiveFields: []            // 没有 ark 那两个
+exclusiveFields: []            // 一个方言专属字段都不收，所以 ark 的 flag 在这里即报错
 parseErrorBody(json) → {type:"error", error:{type, message}} 里取 message，code 用 error.type
 ```
 
@@ -631,6 +635,21 @@ mediagen video status <上一步打印的 task_id> --provider <上一步的 prov
 - dashscope 视频若日后复活，它需要的是「按模型分派请求体」的能力层，而不是本接口的改动。
 
 ## 修订记录
+
+### 整分支 review 之后的补充（2026-10-28）
+
+- **create 的「未解出」失败统一带警告。** 原设计只给「建任务超时」写了「任务可能已创建并
+  计费」的文案，但同一风险存在于另外五条路径：请求发出后 socket 被 reset、响应体读不出来、
+  2xx 空 body、2xx 非 JSON、2xx 却没有 id。最后一条在没有异常环境时也会发生（厂商改字段名、
+  代理包一层），而它意味着**必然已经扣费**。现在 `createTask` 对所有「请求已离开本进程、
+  却没拿到 id」的失败（`NO_RESPONSE_STATUS`、`>=500`、2xx 解析失败、`taskIdFrom` 抛错）
+  都追加同一句补救指引；4xx/429 不追加，因为那确实等于没建。
+- **task id 在传输出口就清洗。** 它会同时进 stderr 的 note、stdout 的结果行、JSON 信封和
+  轮询 URL，所以 `safeLine`（清控制字节 + 200 字符上限）与脱敏都在 `http.ts` 落地，而不是
+  在渲染处各修一遍。
+- **`exclusiveFields` 的语义与全集**（见 §4.1 的说明与 §4.7 的取值）。
+- **下载扩展名优先看方言声明的容器**（`AsyncTaskResult.format`）：ark 可以回
+  `output_format: "mov"` 而 URL 没有后缀，把 mov 命名成 `.mp4` 是对文件内容的错误陈述。
 
 ### 第一轮（builder check，2026-10-28）
 

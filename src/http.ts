@@ -364,6 +364,11 @@ interface VideoRoundTripParams {
    */
   timeoutMessage?: string;
   /**
+   * Appended to every failure where the request left this process without a usable
+   * answer, so a create cannot read as "nothing happened".
+   */
+  unresolvedNote?: string;
+  /**
    * Replaces the generic message for a 404, which for a poll means "unknown id
    * here". It receives the response body: a proxy whose host is right and whose
    * path is wrong answers 404 too, and only the vendor's own line says so.
@@ -382,13 +387,37 @@ interface VideoRoundTrip {
  * that needs one: say the task may exist and send the user to the one place that
  * can find it, or the first instinct is to resubmit and pay twice.
  */
+/**
+ * The one sentence every create failure that *may* have been accepted must carry.
+ * A timeout is not the only such failure: a reset socket, a body that would not read,
+ * a 5xx from a gateway whose origin did accept the task, or a `2xx` whose id could not
+ * be parsed all leave the same possibility behind. Without the sentence the message
+ * reads as "nothing happened", and the first instinct is to submit again and pay twice.
+ */
+const UNRESOLVED_CREATE_NOTE =
+  "the task may already have been created and paid for. No task id came back, so " +
+  "check your provider's console or usage page for a recent task before submitting again.";
+
 function createTimeoutMessage(provider: ProviderConfig): string {
   return (
     `${provider.name} create request timed out after ${REQUEST_TIMEOUT_MS / 1000}s: ` +
-    "the task may already have been created and paid for. " +
-    "No task id is known here, so check your provider's console or usage page for a " +
-    "recent task before submitting again."
+    UNRESOLVED_CREATE_NOTE
   );
+}
+
+/** The note as a suffix, or nothing. */
+function unresolvedSuffix(note: string | undefined): string {
+  return note === undefined ? "" : ` ${note}`;
+}
+
+/** Appends the note to an error without losing its type, code, task id or status. */
+function withNote(error: unknown, note: string | undefined): unknown {
+  if (note === undefined) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof ApiError) {
+    return new ApiError(`${message} ${note}`, error.code, error.taskId, error.status);
+  }
+  return new ApiError(`${message} ${note}`);
 }
 
 /**
@@ -427,7 +456,8 @@ function requestIdOf(response: Response): string | undefined {
  * because they must fail, and stay silent about the key, in exactly one way.
  */
 async function sendVideoRequest(params: VideoRoundTripParams): Promise<VideoRoundTrip> {
-  const { binding, adapter, apiKey, method, url, body, timeoutMessage, notFoundMessage } = params;
+  const { binding, adapter, apiKey, method, url, body, timeoutMessage, notFoundMessage, unresolvedNote } =
+    params;
   const provider = binding.provider;
   const redact = redactorFor(apiKey);
   const timeoutSeconds = REQUEST_TIMEOUT_MS / 1000;
@@ -453,30 +483,52 @@ async function sendVideoRequest(params: VideoRoundTripParams): Promise<VideoRoun
       );
     }
     throw httpError(
-      `${provider.name} API request to ${redact(hostOf(url))} failed: ${redact(errorMessage(error))}`,
+      `${provider.name} API request to ${redact(hostOf(url))} failed: ` +
+        `${redact(errorMessage(error))}${unresolvedSuffix(unresolvedNote)}`,
       NO_RESPONSE_STATUS,
     );
   }
 
-  const text = await readResponseText(
-    response,
-    url,
-    redact,
-    timeoutSeconds,
-    // A create whose body could not be read may already be accepted and paid
-    // for, so the dangerous wording has to survive a read timeout too.
-    timeoutMessage,
-  );
+  let text: string;
+  try {
+    text = await readResponseText(
+      response,
+      url,
+      redact,
+      timeoutSeconds,
+      // A create whose body could not be read may already be accepted and paid
+      // for, so the dangerous wording has to survive a read timeout too.
+      timeoutMessage,
+    );
+  } catch (error) {
+    // Headers arrived, so the request was definitely delivered.
+    throw withNote(error, unresolvedNote);
+  }
 
   if (!response.ok) {
     if (response.status === 404 && notFoundMessage !== undefined) {
       throw httpError(redact(notFoundMessage(text)), response.status);
     }
-    throw errorForStatus(text, response.status, provider, binding.dialect, adapter, redact);
+    // A 5xx (or a gateway timeout) says the request reached something; only a 4xx
+    // says it was rejected outright, so only those are safe to read as "nothing ran".
+    const note = response.status >= 500 ? unresolvedNote : undefined;
+    throw withNote(
+      errorForStatus(text, response.status, provider, binding.dialect, adapter, redact),
+      note,
+    );
+  }
+
+  // A 2xx body that will not parse still came from a server that accepted the
+  // request, so for a create it carries the same "may already be paid for" risk.
+  let json: unknown;
+  try {
+    json = parseJson(text, response.status, redact);
+  } catch (error) {
+    throw withNote(error, unresolvedNote);
   }
 
   return {
-    json: parseJson(text, response.status, redact),
+    json,
     requestId: requestIdOf(response),
   };
 }
@@ -536,9 +588,23 @@ export async function createTask(
     url,
     body: payload,
     timeoutMessage: createTimeoutMessage(binding.provider),
+    unresolvedNote: UNRESOLVED_CREATE_NOTE,
   });
 
-  const taskId = redacting(() => adapter.taskIdFrom(json), redact);
+  // The id is either usable as printed or not usable at all: a vendor string carrying
+  // control bytes would clear the terminal, and one carrying megabytes would flood the
+  // stdout an agent parses. Both channels (stderr note, stdout result) get the same
+  // short, clean value from here on.
+  let taskId: string;
+  try {
+    taskId = safeLine(redacting(() => adapter.taskIdFrom(json), redact));
+  } catch (error) {
+    // A 2xx we could read but an id we could not: the task exists and is billed, and
+    // this is the failure most likely to happen in normal operation (a vendor renaming
+    // the field, a proxy wrapping the body). Without the warning it reads as "nothing
+    // was created", which is the one wrong conclusion at this point.
+    throw withNote(error, UNRESOLVED_CREATE_NOTE);
+  }
   return requestId === undefined ? { taskId } : { taskId, requestId };
 }
 

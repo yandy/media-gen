@@ -858,9 +858,60 @@ describe("createTask: the async video task is created exactly once", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect(error.message).toMatch(/may already have been created and paid/i);
     // No id exists at this point, so the remedy cannot be a command that needs one.
-    expect(error.message).toMatch(/no task id is known/i);
+    expect(error.message).toMatch(/no task id came back/i);
     expect(error.message).toMatch(/console|usage/i);
     expect(error.message).not.toContain("video status");
+  });
+
+  // A timeout is only one way to lose the id of a task that was accepted. Each of
+  // these left the process, so each must carry the same warning: read as "nothing
+  // happened", the caller submits again and pays for a second task.
+  const unresolvedCreates: [string, () => Promise<Response>][] = [
+    ["a network failure after the request was sent", () => Promise.reject(new TypeError("fetch failed"))],
+    ["a 200 with an empty body", async () => new Response("", { status: 200 })],
+    ["a 200 that is not JSON", async () => new Response("<html>proxy</html>", { status: 200 })],
+    ["a 200 whose body carries no id", async () => jsonResponse({ ok: true })],
+    ["a 5xx from the gateway", async () => new Response("", { status: 504 })],
+  ];
+
+  it.each(unresolvedCreates)("warns when a create ends unresolved: %s", async (_name, respond) => {
+    stubVideoFetch(respond);
+
+    const error = await rejection(
+      createTask({ binding: arkBinding(), apiKey: "sk-x", request: VIDEO_REQUEST }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toMatch(/may already have been created and paid/i);
+    expect(error.message).toMatch(/console|usage/i);
+  });
+
+  it("does not warn on a create the vendor rejected outright", async () => {
+    // A 400/401/429 means nothing was created, so a warning would only add noise
+    // to a message that already tells the user what to fix.
+    stubVideoFetch(jsonResponse({ error: { code: "InvalidParameter", message: "bad" } }, 400));
+
+    const error = await rejection(
+      createTask({ binding: arkBinding(), apiKey: "sk-x", request: VIDEO_REQUEST }),
+    );
+
+    expect(error.message).not.toMatch(/may already have been created/i);
+  });
+
+  it("cleans the task id before it leaves the transport", async () => {
+    // The id reaches stdout, stderr and a URL; a hostile one must not carry control
+    // bytes or megabytes into any of them.
+    stubVideoFetch(jsonResponse({ id: `cgt-1${"\u001b[2J".repeat(3)}${"x".repeat(5_000)}` }));
+
+    const { taskId } = await createTask({
+      binding: arkBinding(),
+      apiKey: "sk-x",
+      request: VIDEO_REQUEST,
+    });
+
+    expect(taskId).not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(taskId.length).toBeLessThan(300);
+    expect(taskId.startsWith("cgt-1")).toBe(true);
   });
 
   it("keeps that warning when only the response body times out", async () => {

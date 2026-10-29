@@ -89,10 +89,7 @@ export function minimaxPollPath(id: string): string {
   return `/v2/query/video_generation/${encodeURIComponent(id)}`;
 }
 
-function minimaxFailure(
-  status: string,
-  error: unknown,
-): { code?: string; message: string } {
+function minimaxFailure(error: unknown): { code?: string; message: string } {
   // The engine already prints the state, so the fallback must not repeat it: the
   // useful thing to say is that the vendor explained nothing.
   const fallback = "minimax reported no message";
@@ -137,8 +134,8 @@ export function minimaxPollOutcome(json: unknown): TaskOutcome {
     return { state: "succeeded", result };
   }
 
-  if (status === "failed") return { state: "failed", failure: minimaxFailure(status, task.error) };
-  if (status === "cancelled") return { state: "cancelled", failure: minimaxFailure(status, task.error) };
+  if (status === "failed") return { state: "failed", failure: minimaxFailure(task.error) };
+  if (status === "cancelled") return { state: "cancelled", failure: minimaxFailure(task.error) };
 
   // A status nobody anticipated must fail loudly: treating it as "still running" would
   // burn the whole poll budget on a paid task while the answer never changes.
