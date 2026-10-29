@@ -126,8 +126,9 @@ function extensionFromContentType(
  *
  * A video may not: its URL often carries a thumbnail suffix (`.jpg`/`.png`) or
  * no suffix at all, and naming a clip after bytes it does not hold would be a
- * lie. So `kind` outranks the URL — only a *video* URL extension can win — and
- * the fallback is `mp4` rather than `png`.
+ * lie. So the container the vendor declared (`AsyncTaskResult.format`) outranks
+ * everything, then only a *video* URL extension can win, then the content type,
+ * and the fallback is `mp4` rather than `png`.
  */
 export function inferExtension(
   result: SavedMedia,

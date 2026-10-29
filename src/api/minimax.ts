@@ -90,8 +90,9 @@ export function minimaxPollPath(id: string): string {
 }
 
 function minimaxFailure(error: unknown): { code?: string; message: string } {
-  // The engine already prints the state, so the fallback must not repeat it: the
-  // useful thing to say is that the vendor explained nothing.
+  // The engine already prints the state, so repeating it here would read as a
+  // contradiction ("cancelled: minimax task cancelled"). Say instead that the vendor
+  // explained nothing.
   const fallback = "minimax reported no message";
   if (isRecord(error)) {
     const message =

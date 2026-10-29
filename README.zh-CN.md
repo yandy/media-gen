@@ -56,7 +56,7 @@ Node >= 18，两个运行时依赖，需要 DashScope 和/或方舟的 API key�
 | `MiniMax-H3` | `--provider minimax` | 同样的事，最高 2K，来自 MiniMax |
 
 `aliyun` / `volcengine` / `minimax` 是首次运行写进 `config.toml` 的三个 provider 名，可以随意改。
-一个模型只有被列在该 provider 的 `image` 表的 `models = [...]` 里才可用；同一家厂商的
+一个模型只有被列在该 provider **对应任务**（`image` 或 `video`）表的 `models = [...]` 里才可用；同一家厂商的
 第二个模型是往那张表里加一行 —— 不需要新增 provider。模型 id 是带日期的快照，随版本
 滚动时改 `models`（以及 `default`）即可。
 

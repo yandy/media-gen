@@ -382,13 +382,10 @@ interface VideoRoundTrip {
 }
 
 /**
- * A create timeout is the dangerous one: the request may have reached the
- * server and been accepted. No id came back, so the remedy cannot be a command
- * that needs one: say the task may exist and send the user to the one place that
- * can find it, or the first instinct is to resubmit and pay twice.
- */
-/**
  * The one sentence every create failure that *may* have been accepted must carry.
+ * A timeout is the obvious one: the request reached the server and no id came back,
+ * so the remedy cannot be a command that needs one — say the task may exist and send
+ * the user to the one place that can find it, or the first instinct is to resubmit.
  * A timeout is not the only such failure: a reset socket, a body that would not read,
  * a 5xx from a gateway whose origin did accept the task, or a `2xx` whose id could not
  * be parsed all leave the same possibility behind. Without the sentence the message
@@ -501,8 +498,9 @@ async function sendVideoRequest(params: VideoRoundTripParams): Promise<VideoRoun
       timeoutMessage,
     );
   } catch (error) {
-    // Headers arrived, so the request was definitely delivered.
-    throw withNote(error, unresolvedNote);
+    // Headers arrived, so the request was definitely delivered. `timeoutMessage`
+    // already ends with the note, and appending it twice reads like a stutter.
+    throw withNote(error, timeoutMessage === undefined ? unresolvedNote : undefined);
   }
 
   if (!response.ok) {

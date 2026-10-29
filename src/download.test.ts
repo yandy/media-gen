@@ -174,16 +174,16 @@ describe("inferExtension", () => {
     );
   });
 
-  it("prefers the container the vendor declared over a bare URL", () => {
-  // ark can report output_format "mov" while the clip URL carries no suffix; naming
-  // those bytes .mp4 would be a lie about the file.
-  expect(inferExtension({ url: "https://cdn/x/clip", format: "mov" }, undefined, "video")).toBe("mov");
-  expect(inferExtension({ url: "https://cdn/x/clip.mp4", format: "mov" }, undefined, "video")).toBe("mov");
-  // A vendor string that is not a known container falls through to the URL, and one
-  // that could escape the directory is ignored outright.
-  expect(inferExtension({ url: "https://cdn/x/clip.mp4", format: "avi" }, undefined, "video")).toBe("mp4");
-  expect(inferExtension({ url: "https://cdn/x/clip.webm", format: "../../evil" }, undefined, "video")).toBe("webm");
-});
+    it("prefers the container the vendor declared over a bare URL", () => {
+    // ark can report output_format "mov" while the clip URL carries no suffix; naming
+    // those bytes .mp4 would be a lie about the file.
+    expect(inferExtension({ url: "https://cdn/x/clip", format: "mov" }, undefined, "video")).toBe("mov");
+    expect(inferExtension({ url: "https://cdn/x/clip.mp4", format: "mov" }, undefined, "video")).toBe("mov");
+    // A vendor string that is not a known container falls through to the URL, and one
+    // that could escape the directory is ignored outright.
+    expect(inferExtension({ url: "https://cdn/x/clip.mp4", format: "avi" }, undefined, "video")).toBe("mp4");
+    expect(inferExtension({ url: "https://cdn/x/clip.webm", format: "../../evil" }, undefined, "video")).toBe("webm");
+  });
 
 it("does not read an image extension off a video URL", () => {
     // A png suffix on a video would name the file after bytes it does not hold.

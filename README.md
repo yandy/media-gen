@@ -115,7 +115,8 @@ There is no `partial` on video: one request makes one clip. **`ok` means the com
 succeeded, not that a file exists** — `--no-wait`, and a `video status` that finds the
 task still `pending` or `running`, are `{"ok":true,...,"files":[]}` with exit `0`.
 Read `status` and `files`: an `ok: false` there would invite you to submit a task that
-was already paid for. When the poll budget runs out the error carries `task_id` and
+was already paid for. Note that `--no-wait` reports `status: "pending"` without having
+asked — treat it as "unknown" until a `video status` call answers. When the poll budget runs out the error carries `task_id` and
 code `TaskNotFinished`, and `video status <id>` resumes it without paying again.
 
 ## Configuration
