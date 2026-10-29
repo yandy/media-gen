@@ -136,14 +136,27 @@ function firstFrame(images: readonly string[]): string | undefined {
  * must fail here rather than be ignored by the create endpoint after it charged.
  * The wording mirrors the image path's message for the same mistake.
  */
+/**
+ * The optional request fields that are dialect-specific rather than shared. Every
+ * dialect must declare the ones it accepts; the rest are rejected locally, so a flag
+ * from another vendor fails before the request instead of being silently dropped.
+ *
+ * Adding a dialect means adding its own names here, never assuming the list is complete
+ * by accident — an unlisted name escapes this check entirely.
+ */
+const DIALECT_SPECIFIC_FIELDS = [
+  { option: "generateAudio", field: "generate_audio", flag: "--generate-audio" },
+  { option: "outputFormat", field: "output_format", flag: "--output-format" },
+  { option: "watermark", field: "watermark", flag: "--watermark" },
+] as const;
+
 function rejectUndeclaredFlags(opts: VideoOptions, adapter: AsyncTaskAdapter): void {
   const declared = adapter.exclusiveFields ?? [];
 
-  if (opts.generateAudio !== undefined && !declared.includes("generate_audio")) {
-    throw undeclaredFlag("--generate-audio", "generate_audio", adapter);
-  }
-  if (opts.outputFormat !== undefined && !declared.includes("output_format")) {
-    throw undeclaredFlag("--output-format", "output_format", adapter);
+  for (const { option, field, flag } of DIALECT_SPECIFIC_FIELDS) {
+    if (opts[option] !== undefined && !declared.includes(field)) {
+      throw undeclaredFlag(flag, field, adapter);
+    }
   }
 }
 

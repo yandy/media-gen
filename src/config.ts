@@ -220,6 +220,7 @@ function isVendorHost(hostname: string): boolean {
     host === "ark.cn-beijing.volces.com" ||
     host === "dashscope.aliyuncs.com" ||
     host === "dashscope-intl.aliyuncs.com" ||
+    host === "api.minimax.io" ||
     host.endsWith(".maas.aliyuncs.com")
   );
 }
@@ -228,7 +229,7 @@ function isVendorHost(hostname: string): boolean {
 function readDialect(
   value: unknown,
 ): { dialect: Dialect; deprecated: boolean } | undefined {
-  if (value === "openai" || value === "dashscope" || value === "ark") {
+  if (value === "openai" || value === "dashscope" || value === "ark" || value === "minimax") {
     return { dialect: value, deprecated: false };
   }
   if (value === "qwen") return { dialect: "openai", deprecated: true };
@@ -237,7 +238,7 @@ function readDialect(
 
 /** The one sentence every invalid-api_type error ends with. */
 const DIALECT_CHOICES =
-  'expected "openai", "dashscope" or "ark" ("qwen" is accepted as a deprecated alias of "openai")';
+  'expected "openai", "dashscope", "ark" or "minimax" ("qwen" is accepted as a deprecated alias of "openai")';
 
 function isTable(value: unknown): value is TomlTable {
   return typeof value === "object" && value !== null && !Array.isArray(value);

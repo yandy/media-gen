@@ -1930,14 +1930,13 @@ describe("video generate", () => {
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
-  it("names the seeded video model and the async contract in its help", async () => {
+  it("names both video dialects and the async contract in its help", async () => {
     const help = (await run(["video", "generate", "--help"])).stdout;
 
     expect(help).toContain("doubao-seedance-1-0-pro-250528");
     expect(help).toContain("--no-wait");
-    // Nothing this commit does not have may appear in help: the second dialect
-    // arrives with its own task. `video status` is implemented, so it may be named.
-    expect(help).not.toContain("MiniMax");
+    // Both dialects are registered now, so both may be named.
+    expect(help).toContain("MiniMax-H3");
     expect(help).toContain("video status");
 
     // The root help is where someone decides whether to run this at all, so the
@@ -2030,5 +2029,48 @@ describe("video status", () => {
     // Both claims were wrong once; pin the corrected wording.
     expect(help).toContain("the only one that cannot spend money");
     expect(help).toContain("is not sent");
+  });
+});
+
+describe("the minimax dialect in config and on the video command", () => {
+  it("stores a minimax video table and shows its endpoint", async () => {
+    const added = await run([
+      "config", "add", "mm",
+      "--api-type", "minimax",
+      "--base-url", "https://api.minimax.io",
+      "--task", "video",
+      "--model", "MiniMax-H3",
+    ]);
+
+    expect(added.code).toBe(0);
+    expect(loadConfig().providers.mm.tasks.video).toEqual({
+      api_type: "minimax",
+      default: "MiniMax-H3",
+      models: ["MiniMax-H3"],
+    });
+
+    const shown = await run(["config", "show"]);
+    expect(shown.stdout).toContain("endpoint: https://api.minimax.io/v2/video_generation");
+  });
+
+  it("points at --provider when a minimax provider is asked for another host's task", async () => {
+    writeConfig(`default_provider = "mm"
+
+[providers.mm]
+base_url = "https://api.minimax.io"
+api_key_env = "MINIMAX_API_KEY"
+
+[providers.mm.video]
+api_type = "minimax"
+default = "MiniMax-H3"
+models = ["MiniMax-H3"]
+`);
+    stubVideoFetch([new Response("", { status: 404 })]);
+
+    const result = await run(["video", "status", "cgt-ark-task", "--provider", "mm", "--api-key", "sk-mm-1"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("--provider");
+    expect(result.stderr).toContain("cgt-ark-task");
   });
 });

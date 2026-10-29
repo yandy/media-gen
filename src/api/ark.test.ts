@@ -456,7 +456,11 @@ describe("ark video task id and polling", () => {
 
   it("declares the resolutions and the exclusive flags of the ark dialect", () => {
     expect(ArkVideoDialect.resolutions).toEqual(["480p", "720p", "1080p", "4k"]);
-    expect(ArkVideoDialect.exclusiveFields).toEqual(["generate_audio", "output_format"]);
+    expect(ArkVideoDialect.exclusiveFields).toEqual([
+      "generate_audio",
+      "output_format",
+      "watermark",
+    ]);
     expect(ArkVideoDialect.createPath).toBe("/api/v3/contents/generations/tasks");
   });
 });

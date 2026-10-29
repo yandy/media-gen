@@ -8,6 +8,7 @@ import type {
 } from "../types.js";
 import { ArkDialect, ArkVideoDialect } from "./ark.js";
 import { DashscopeDialect } from "./dashscope.js";
+import { MinimaxVideoDialect } from "./minimax.js";
 import { QwenDialect } from "./qwen.js";
 
 /**
@@ -22,6 +23,9 @@ const DIALECTS: Record<Dialect, DialectAdapters> = {
   // dropped, because its wire shape shares nothing with the async video dialects.
   dashscope: { image: DashscopeDialect },
   ark: { image: ArkDialect, video: ArkVideoDialect },
+  // A video-only service: nothing in this dialect serves an image today, and the
+  // registry says so rather than pretending.
+  minimax: { video: MinimaxVideoDialect },
 };
 
 /**

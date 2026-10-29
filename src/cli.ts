@@ -370,6 +370,7 @@ creating it is what gets billed, and the file appears one to five minutes later.
 
 Models (--provider picks the account, --model the exact id; config.toml decides what is allowed):
   doubao-seedance-1-0-pro-250528   volcengine  text to video, or from one first frame
+  MiniMax-H3                       minimax     text to video, or from one first frame
   A model must be listed in models = [...] under [providers.<name>.video].
 
 Cost and interruption:
@@ -383,9 +384,10 @@ One video per request:
   the command again — with a different --seed if you want it to differ.
 
 Flags the vendor checks, not this CLI:
-  --resolution --duration --generate-audio --output-format are passed through. Whether
-  a given model supports a tier or a range is validated by the vendor when the task is
-  created, before anything is billed.
+  --resolution --duration are passed through; whether a given model supports a tier or
+  a range is validated by the vendor when the task is created, before anything is billed.
+  --generate-audio and --output-format are ark-only, and --watermark is ark-only too:
+  the minimax dialect rejects them before any request.
 
 Output:
   Files are written to --out-dir (default: config output_dir, else the current
@@ -993,10 +995,14 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
   const provider = name.trim();
   if (provider === "") throw new UsageError("a provider name is required");
 
-  const apiType = parseChoice(flags.apiType, ["openai", "dashscope", "ark", "qwen"], "--api-type");
+  const apiType = parseChoice(
+    flags.apiType,
+    ["openai", "dashscope", "ark", "minimax", "qwen"],
+    "--api-type",
+  );
   if (apiType === undefined) {
     throw new UsageError(
-      '--api-type is required: "openai", "dashscope" or "ark" ("qwen" still works as a deprecated alias of "openai")',
+      '--api-type is required: "openai", "dashscope", "ark" or "minimax" ("qwen" still works as a deprecated alias of "openai")',
     );
   }
   if (flags.baseUrl === undefined) throw new UsageError("--base-url is required");

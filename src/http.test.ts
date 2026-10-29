@@ -112,6 +112,16 @@ function arkBinding(overrides: Partial<TaskBinding> = {}, baseUrl = ARK_BASE_URL
   };
 }
 
+function minimaxBinding(): TaskBinding {
+  return {
+    provider: { name: "minimax", api_type: "minimax", base_url: "https://api.minimax.io" },
+    task: "video",
+    model: "MiniMax-H3",
+    timeout_ms: 1_800_000,
+    dialect: "minimax",
+  };
+}
+
 interface VideoCall {
   url: string;
   method: string | undefined;

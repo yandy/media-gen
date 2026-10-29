@@ -867,6 +867,42 @@ models = ["m"]
     expect(error.message).toContain('"openai"');
     expect(error.message).toContain('"dashscope"');
     expect(error.message).toContain('"ark"');
+    expect(error.message).toContain('"minimax"');
+  });
+
+  it("accepts minimax as a task protocol and resolves a video binding from it", () => {
+    writeConfig(`default_provider = "mm"
+
+[providers.mm]
+base_url = "https://api.minimax.io"
+api_key_env = "MINIMAX_API_KEY"
+
+[providers.mm.video]
+api_type = "minimax"
+default = "MiniMax-H3"
+models = ["MiniMax-H3", "MiniMax-H3-Max"]
+`);
+
+    const binding = resolveSelection({ task: "video" }, loadConfig());
+
+    expect(binding.dialect).toBe("minimax");
+    expect(binding.model).toBe("MiniMax-H3");
+    expect(binding.provider.base_url).toBe("https://api.minimax.io");
+  });
+
+  it("refuses a sub-path on minimax's own host, like the other vendors", () => {
+    writeConfig(`[providers.mm]
+base_url = "https://api.minimax.io/v2"
+
+[providers.mm.video]
+api_type = "minimax"
+default = "MiniMax-H3"
+models = ["MiniMax-H3"]
+`);
+
+    expect(() => resolveSelection({ provider: "mm", task: "video" }, loadConfig())).toThrow(
+      /it points at the sub-path "\/v2"/,
+    );
   });
 });
 

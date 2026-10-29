@@ -293,5 +293,5 @@ export const ArkVideoDialect: AsyncTaskAdapter = {
   pollPath: arkPollPath,
   pollOutcome: arkPollOutcome,
   resolutions: ["480p", "720p", "1080p", "4k"],
-  exclusiveFields: ["generate_audio", "output_format"],
+  exclusiveFields: ["generate_audio", "output_format", "watermark"],
 };

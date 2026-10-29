@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArkVideoDialect } from "./api/ark.js";
+import { MinimaxVideoDialect } from "./api/minimax.js";
 import { writeConfigFile } from "./config.js";
 import { ApiError, ConfigError, UsageError } from "./errors.js";
 import type { AsyncTaskAdapter, VideoDeps } from "./types.js";
@@ -20,18 +21,7 @@ const ARK_VIDEO_URL = "https://ark.cn-beijing.volces.com/api/v3/contents/generat
 
 const arkAdapter = ArkVideoDialect;
 
-/**
- * Stand-in for `MinimaxVideoDialect`, which does not exist yet: the same shape,
- * its own tiers, and none of ark's exclusive fields. Task 8 deletes it and
- * imports the real adapter instead.
- */
-const minimaxAdapter: AsyncTaskAdapter = {
-  ...arkAdapter,
-  dialect: "minimax",
-  createPath: "/v2/video_generation",
-  resolutions: ["480p", "768p", "2k"],
-  exclusiveFields: [],
-};
+const minimaxAdapter = MinimaxVideoDialect;
 
 const originalEnv = {
   MEDIAGEN_CLI_CONFIG_DIR: process.env.MEDIAGEN_CLI_CONFIG_DIR,
@@ -220,6 +210,14 @@ describe("buildVideoRequest", () => {
   it("rejects a flag the dialect does not accept", () => {
     expect(() => buildVideoRequest("p", { generateAudio: true, noWait: false }, "m", minimaxAdapter))
       .toThrow(/"generate_audio".*minimax/);
+  });
+
+  it("rejects watermark on a dialect that does not take it", () => {
+    expect(() => buildVideoRequest("p", { watermark: true, noWait: false }, "m", minimaxAdapter))
+      .toThrow(/"watermark".*minimax/);
+    expect(buildVideoRequest("p", { watermark: true, noWait: false }, "m", arkAdapter).watermark).toBe(
+      true,
+    );
   });
 
   it("keeps a dialect's own exclusive flag on the dialect that declares it", () => {
