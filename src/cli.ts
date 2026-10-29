@@ -172,11 +172,10 @@ Quickstart:
   mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com/v1 --model qwen-image-3.0
   mediagen login --provider my-proxy --api-key sk-...      # store a key in auth.json
   mediagen image generate "a red fox in fresh snow" --provider my-proxy --out-dir ./out
-  mediagen video generate "a fox running through deep snow" --provider volcengine
-  mediagen video generate "..." --no-wait            # returns the task id immediately
-  mediagen video status <task-id> --json             # check a task you already paid for
   mediagen image edit "make the sky sunset orange" --image ./photo.jpg
   mediagen image generate "..." --json               # {"ok":..,"files":[..],"errors":[..]}
+  mediagen video generate "a fox running through deep snow" --provider volcengine
+  mediagen video generate "..." --no-wait --json     # returns the task id immediately
 
 Subcommands:
   login / logout    store or remove a provider's API key in auth.json; provider
@@ -185,11 +184,10 @@ Subcommands:
   config show       the resolved configuration, with a source note for each value
   config path       where config.toml lives
   config add        create a provider in config.toml (edit the file for anything else)
-  video generate    create a video task and save the result (async; billed on create)
-  video status      check one task once, and save its video if it finished
 
-Exit codes: 0 success (including a partial success that saved at least one file),
-1 an API/config/runtime failure, 2 a usage error.
+Exit codes: 0 success — including a partial image success that saved at least one
+file, or a video task that was created and is still running; 1 an
+API/config/runtime failure, 2 a usage error.
 
 Run "mediagen image generate --help" for the flag list, the model table and examples.`;
 
@@ -331,7 +329,7 @@ const VIDEO_OPTION_HELP = {
   provider: "provider name declared in config.toml (default: config default_provider)",
   model: "model id, must be listed in the task's models (default: the task's default)",
   image: "first frame, one per request; local files are sent as data URLs",
-  resolution: "480p | 720p | 1080p | 4k, case-insensitive (which tiers a model supports is the vendor's call)",
+  resolution: "a resolution tier the dialect accepts, case-insensitive (e.g. 480p, 720p; which tiers a model supports is the vendor's call)",
   ratio: `one of ${RATIOS.join(", ")}`,
   duration: "seconds, a positive integer (the range is the model's)",
   seed: "non-negative integer",
@@ -357,9 +355,9 @@ Models (--provider picks the account, --model the exact id; config.toml decides 
 
 Cost and interruption:
   The task is paid for when it is created. If this process is interrupted, do not
-  submit again: the task keeps running for a while, and "mediagen video status <id>"
-  can still fetch it. --no-wait prints that id immediately for exactly this reason.
-  The task id is also written to stderr right after the task is created.
+  submit again: the task keeps running for a while and can still be fetched by its
+  id. --no-wait prints that id immediately for exactly this reason, and the id is
+  also written to stderr right after the task is created.
 
 One video per request:
   --n belongs to image; here it is not an option at all. For a second variant, run
@@ -384,10 +382,7 @@ Examples:
   mediagen video generate "the same fox, now shaking the snow off" --image ./fox.png --provider volcengine
 
   # do not wait: hand the task id to a later step (an agent usually wants this)
-  mediagen video generate "a slow pan over a frozen lake" --provider volcengine --no-wait --json
-
-  # collect it afterwards
-  mediagen video status cgt-20261028-abcd --provider volcengine --out-dir ./clips`;
+  mediagen video generate "a slow pan over a frozen lake" --provider volcengine --no-wait --json`;
 }
 
 /** Adds the flags of `video generate`. There is no --n and no --size: see videoHelpText(). */

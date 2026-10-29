@@ -1850,7 +1850,9 @@ describe("video generate", () => {
     ]);
 
     expect(result.code).toBe(0);
-    expect(result.stdout.trim()).toMatch(/volcengine-doubao-seedance-1-0-pro-250528-.*-0\.mp4$/);
+    // Exact: a note leaking onto stdout, or a second line of any kind, must fail here.
+    expect(result.stdout.trim()).toMatch(/^\/.*volcengine-doubao-seedance-1-0-pro-250528-.*-0\.mp4$/);
+    expect(result.stdout).not.toContain("note:");
     expect(result.stderr).toContain("cgt-1");
     expect(stub.calls[0]).toEqual({ url: VIDEO_CREATE_URL, method: "POST" });
   });
@@ -1888,6 +1890,19 @@ describe("video generate", () => {
 
     const sized = await run(["video", "generate", "p", "--size", "2K"]);
     expect(sized.code).toBe(2);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it("rejects a second --image instead of silently dropping it", async () => {
+    const result = await run([
+      "video", "generate", "p", "--provider", "volcengine", "--api-key", VIDEO_KEY,
+      "--image", writeImage("a.png"), "--image", writeImage("b.png"),
+    ]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toMatch(/one --image/);
+    expect(result.stderr).toMatch(/last_frame|首尾帧/i);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
   it("fails on an unwritable --out-dir before creating the paid task", async () => {
@@ -1902,14 +1917,17 @@ describe("video generate", () => {
       "--api-key", VIDEO_KEY, "--out-dir", target,
     ]);
 
-    expect(result.code).not.toBe(0);
+    // Same class as the image path's: a UsageError, so exit 2, and nothing was spent.
+    expect(result.code).toBe(2);
     expect(result.stderr).toContain(target);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
   it("rejects an empty prompt before any request", async () => {
     const result = await run(["video", "generate", "   ", "--provider", "volcengine", "--api-key", VIDEO_KEY]);
 
     expect(result.code).toBe(2);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
   it("names the seeded video model and the async contract in its help", async () => {
@@ -1917,7 +1935,9 @@ describe("video generate", () => {
 
     expect(help).toContain("doubao-seedance-1-0-pro-250528");
     expect(help).toContain("--no-wait");
-    // No other video dialect is registered yet, so help must not advertise one.
+    // Nothing this commit does not have may appear in help: no second dialect, and no
+    // command that is added by a later task.
     expect(help).not.toContain("MiniMax");
+    expect(help).not.toContain("video status");
   });
 });
