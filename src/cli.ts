@@ -29,7 +29,15 @@ import {
 } from "./config.js";
 import { ConfigError, UsageError } from "./errors.js";
 import { runGenerate, type GenerateOptions } from "./generate.js";
-import { renderError, renderHuman, renderJson, type RenderedOutput } from "./output.js";
+import { RATIOS, runVideoGenerate, type VideoOptions } from "./video.js";
+import {
+  renderError,
+  renderHuman,
+  renderJson,
+  renderVideoHuman,
+  renderVideoJson,
+  type RenderedOutput,
+} from "./output.js";
 import { shellArg, tomlBasicString, tomlKey } from "./toml.js";
 import type { Task } from "./types.js";
 import { adapterPath } from "./api/index.js";
@@ -137,6 +145,25 @@ interface ImageFlags {
   baseUrl?: string;
 }
 
+interface VideoFlags {
+  provider?: string;
+  model?: string;
+  image?: string[];
+  resolution?: string;
+  ratio?: string;
+  duration?: string;
+  seed?: string;
+  watermark?: string;
+  generateAudio?: string;
+  outputFormat?: string;
+  outDir?: string;
+  json?: boolean;
+  apiKey?: string;
+  baseUrl?: string;
+  /** `--no-wait` is a negated flag, so commander reports `wait === false`. */
+  wait?: boolean;
+}
+
 const ROOT_HELP = `
 Built for AI agents: explicit flags, no interactive prompts, machine-readable output.
 
@@ -145,6 +172,9 @@ Quickstart:
   mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com/v1 --model qwen-image-3.0
   mediagen login --provider my-proxy --api-key sk-...      # store a key in auth.json
   mediagen image generate "a red fox in fresh snow" --provider my-proxy --out-dir ./out
+  mediagen video generate "a fox running through deep snow" --provider volcengine
+  mediagen video generate "..." --no-wait            # returns the task id immediately
+  mediagen video status <task-id> --json             # check a task you already paid for
   mediagen image edit "make the sky sunset orange" --image ./photo.jpg
   mediagen image generate "..." --json               # {"ok":..,"files":[..],"errors":[..]}
 
@@ -155,6 +185,8 @@ Subcommands:
   config show       the resolved configuration, with a source note for each value
   config path       where config.toml lives
   config add        create a provider in config.toml (edit the file for anything else)
+  video generate    create a video task and save the result (async; billed on create)
+  video status      check one task once, and save its video if it finished
 
 Exit codes: 0 success (including a partial success that saved at least one file),
 1 an API/config/runtime failure, 2 a usage error.
@@ -295,6 +327,89 @@ function collectImage(value: string, previous: string[] | undefined): string[] {
   return previous === undefined ? [value] : [...previous, value];
 }
 
+const VIDEO_OPTION_HELP = {
+  provider: "provider name declared in config.toml (default: config default_provider)",
+  model: "model id, must be listed in the task's models (default: the task's default)",
+  image: "first frame, one per request; local files are sent as data URLs",
+  resolution: "480p | 720p | 1080p | 4k, case-insensitive (which tiers a model supports is the vendor's call)",
+  ratio: `one of ${RATIOS.join(", ")}`,
+  duration: "seconds, a positive integer (the range is the model's)",
+  seed: "non-negative integer",
+  watermark: "true|false (default: the vendor default)",
+  generateAudio: "true|false, where the model supports it (2.0/2.5)",
+  outputFormat: "mp4|mov, where the model supports it (2.5)",
+  outDir: "where to write files (default: config output_dir, else cwd)",
+  json: "print one JSON object instead of the file path",
+  apiKey: "one-off API key; overrides env and auth.json",
+  baseUrl: "one-off provider origin, e.g. https://ark.cn-beijing.volces.com",
+  noWait: "create the task and print its id instead of waiting for the video",
+} as const;
+
+/** The body of `video generate --help`: models, the async contract, and examples. */
+function videoHelpText(): string {
+  return `
+Generate a video from a prompt. Unlike an image, a video is an asynchronous task:
+creating it is what gets billed, and the file appears one to five minutes later.
+
+Models (--provider picks the account, --model the exact id; config.toml decides what is allowed):
+  doubao-seedance-1-0-pro-250528   volcengine  text to video, or from one first frame
+  A model must be listed in models = [...] under [providers.<name>.video].
+
+Cost and interruption:
+  The task is paid for when it is created. If this process is interrupted, do not
+  submit again: the task keeps running for a while, and "mediagen video status <id>"
+  can still fetch it. --no-wait prints that id immediately for exactly this reason.
+  The task id is also written to stderr right after the task is created.
+
+One video per request:
+  --n belongs to image; here it is not an option at all. For a second variant, run
+  the command again — with a different --seed if you want it to differ.
+
+Flags the vendor checks, not this CLI:
+  --resolution --duration --generate-audio --output-format are passed through. Whether
+  a given model supports a tier or a range is validated by the vendor when the task is
+  created, before anything is billed.
+
+Output:
+  Files are written to --out-dir (default: config output_dir, else the current
+  directory) as <provider>-<model>-<yyyyMMdd-HHmmss>-<index>.<ext>. With --json the
+  envelope carries task_id and status: "pending" or "running" with files: [] means the
+  task exists and was paid for — not that the command failed.
+
+Examples:
+  # text to video, then find the file on stdout
+  mediagen video generate "a red fox running through deep snow, golden hour" --provider volcengine
+
+  # animate the first frame of a still image
+  mediagen video generate "the same fox, now shaking the snow off" --image ./fox.png --provider volcengine
+
+  # do not wait: hand the task id to a later step (an agent usually wants this)
+  mediagen video generate "a slow pan over a frozen lake" --provider volcengine --no-wait --json
+
+  # collect it afterwards
+  mediagen video status cgt-20261028-abcd --provider volcengine --out-dir ./clips`;
+}
+
+/** Adds the flags of `video generate`. There is no --n and no --size: see videoHelpText(). */
+function addVideoOptions(command: Command): Command {
+  return command
+    .option("--provider <name>", VIDEO_OPTION_HELP.provider)
+    .option("--model <id>", VIDEO_OPTION_HELP.model)
+    .option("--image <path-or-url>", VIDEO_OPTION_HELP.image, collectImage)
+    .option("--resolution <tier>", VIDEO_OPTION_HELP.resolution)
+    .option("--ratio <ratio>", VIDEO_OPTION_HELP.ratio)
+    .option("--duration <seconds>", VIDEO_OPTION_HELP.duration)
+    .option("--seed <seed>", VIDEO_OPTION_HELP.seed)
+    .option("--watermark <bool>", VIDEO_OPTION_HELP.watermark)
+    .option("--generate-audio <bool>", VIDEO_OPTION_HELP.generateAudio)
+    .option("--output-format <format>", VIDEO_OPTION_HELP.outputFormat)
+    .option("--out-dir <dir>", VIDEO_OPTION_HELP.outDir)
+    .option("--no-wait", VIDEO_OPTION_HELP.noWait)
+    .option("--json", VIDEO_OPTION_HELP.json)
+    .option("--api-key <key>", VIDEO_OPTION_HELP.apiKey)
+    .option("--base-url <url>", VIDEO_OPTION_HELP.baseUrl);
+}
+
 /**
  * Assembles the whole command tree. `exitOverride()` and `configureOutput()`
  * must be set before any `.command()` call: commander copies both to a
@@ -390,6 +505,19 @@ export function createProgram(options: ProgramOptions = {}): Command {
   addImageOptions(edit).addHelpText("after", imageHelpText("edit"));
   edit.action(async (prompt: string, flags: ImageFlags) => {
     await runImage(prompt, flags, true);
+  });
+
+  const video = program
+    .command("video")
+    .description("Generate video from a prompt; the task is asynchronous and billed on create");
+
+  const videoGenerate = video
+    .command("generate")
+    .description("Create a video task and save the result; add --image for a first frame")
+    .argument("<prompt>", "what to film; quote it and describe the subject, motion and camera");
+  addVideoOptions(videoGenerate).addHelpText("after", videoHelpText());
+  videoGenerate.action(async (prompt: string, flags: VideoFlags) => {
+    await runVideo(prompt, flags);
   });
 
   return program;
@@ -504,6 +632,36 @@ async function runImage(prompt: string, flags: ImageFlags, edit: boolean): Promi
     return;
   }
   emit(renderHuman(result.saved, result.response));
+}
+
+async function runVideo(prompt: string, flags: VideoFlags): Promise<void> {
+  const result = await runVideoGenerate(prompt, toVideoOptions(flags));
+
+  if (flags.json === true) {
+    writeLine(renderVideoJson(result));
+    return;
+  }
+  emit(renderVideoHuman(result));
+}
+
+/** Converts the raw flag strings into `VideoOptions`, so every failure is a UsageError. */
+function toVideoOptions(flags: VideoFlags): VideoOptions {
+  return {
+    provider: flags.provider,
+    model: flags.model,
+    image: flags.image ?? [],
+    resolution: flags.resolution,
+    ratio: parseChoice(flags.ratio, RATIOS, "--ratio"),
+    duration: parseInteger(flags.duration, "--duration"),
+    seed: parseInteger(flags.seed, "--seed"),
+    watermark: parseBool(flags.watermark, "--watermark"),
+    generateAudio: parseBool(flags.generateAudio, "--generate-audio"),
+    outputFormat: parseChoice(flags.outputFormat, ["mp4", "mov"], "--output-format"),
+    outDir: flags.outDir,
+    apiKey: flags.apiKey,
+    baseUrl: flags.baseUrl,
+    noWait: flags.wait === false,
+  };
 }
 
 /** Converts the raw flag strings into `GenerateOptions`, so every failure is a UsageError. */

@@ -1775,3 +1775,149 @@ models = ["m"]
     expect(readConfig()).toBe(before);
   });
 });
+
+const VIDEO_CONFIG = `default_provider = "volcengine"
+
+[providers.volcengine]
+base_url = "https://ark.cn-beijing.volces.com"
+api_key_env = "ARK_API_KEY"
+
+[providers.volcengine.video]
+api_type = "ark"
+default = "doubao-seedance-1-0-pro-250528"
+models = ["doubao-seedance-1-0-pro-250528"]
+`;
+
+const VIDEO_CREATE_URL = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks";
+const VIDEO_KEY = "sk-video-0123456789";
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function mp4Response(): Response {
+  return new Response(Buffer.from("\x00\x00\x00\x18ftypmp42"), {
+    status: 200,
+    headers: { "content-type": "video/mp4" },
+  });
+}
+
+/**
+ * Serves a scripted list of responses in order. An exhausted script answers 400
+ * instead of repeating the last response: video polling sleeps between attempts, so
+ * a script left on "running" would stall this suite for the whole 1800s budget.
+ */
+function stubVideoFetch(responses: Response[]): { calls: { url: string; method: string }[] } {
+  const calls: { url: string; method: string }[] = [];
+  const queue = [...responses];
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method ?? "GET" });
+      const next = queue.shift();
+      if (next === undefined) {
+        return new Response(
+          JSON.stringify({ error: { code: "TestScriptExhausted", message: "no scripted response left" } }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        );
+      }
+      return next;
+    }),
+  );
+
+  return { calls };
+}
+
+describe("video generate", () => {
+  beforeEach(() => {
+    writeConfig(VIDEO_CONFIG);
+  });
+
+  it("creates the task, downloads the video and prints its path on stdout", async () => {
+    const stub = stubVideoFetch([
+      jsonResponse({ id: "cgt-1" }),
+      jsonResponse({ status: "succeeded", content: { video_url: "https://cdn.example.com/v.mp4" } }),
+      mp4Response(),
+    ]);
+
+    const result = await run([
+      "video", "generate", "a fox in snow",
+      "--provider", "volcengine", "--api-key", VIDEO_KEY, "--out-dir", outDir,
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toMatch(/volcengine-doubao-seedance-1-0-pro-250528-.*-0\.mp4$/);
+    expect(result.stderr).toContain("cgt-1");
+    expect(stub.calls[0]).toEqual({ url: VIDEO_CREATE_URL, method: "POST" });
+  });
+
+  it("reports a task it did not wait for as ok, with the id and no files", async () => {
+    stubVideoFetch([jsonResponse({ id: "cgt-1" })]);
+
+    const result = await run([
+      "video", "generate", "a fox in snow", "--provider", "volcengine",
+      "--api-key", VIDEO_KEY, "--no-wait", "--json",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: true, task_id: "cgt-1", status: "pending", files: [], errors: [],
+    });
+    expect(result.stderr).toContain("mediagen video status cgt-1");
+  });
+
+  it("prints the task id on stdout when it did not wait", async () => {
+    stubVideoFetch([jsonResponse({ id: "cgt-1" })]);
+
+    const result = await run([
+      "video", "generate", "a fox in snow", "--provider", "volcengine",
+      "--api-key", VIDEO_KEY, "--no-wait",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe("cgt-1");
+  });
+
+  it("rejects --n and --size before any request", async () => {
+    const result = await run(["video", "generate", "p", "--n", "2"]);
+    expect(result.code).toBe(2);
+
+    const sized = await run(["video", "generate", "p", "--size", "2K"]);
+    expect(sized.code).toBe(2);
+  });
+
+  it("fails on an unwritable --out-dir before creating the paid task", async () => {
+    // A regular file in the parent position makes mkdir fail at once (ENOTDIR).
+    // /proc or a chmod-based path would block or misbehave under the sandbox.
+    const blocker = path.join(tempDir, "not-a-dir");
+    fs.writeFileSync(blocker, "x");
+    const target = path.join(blocker, "out");
+
+    const result = await run([
+      "video", "generate", "p", "--provider", "volcengine",
+      "--api-key", VIDEO_KEY, "--out-dir", target,
+    ]);
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(target);
+  });
+
+  it("rejects an empty prompt before any request", async () => {
+    const result = await run(["video", "generate", "   ", "--provider", "volcengine", "--api-key", VIDEO_KEY]);
+
+    expect(result.code).toBe(2);
+  });
+
+  it("names the seeded video model and the async contract in its help", async () => {
+    const help = (await run(["video", "generate", "--help"])).stdout;
+
+    expect(help).toContain("doubao-seedance-1-0-pro-250528");
+    expect(help).toContain("--no-wait");
+    // No other video dialect is registered yet, so help must not advertise one.
+    expect(help).not.toContain("MiniMax");
+  });
+});

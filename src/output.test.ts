@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, ConfigError, UsageError } from "./errors.js";
-import { renderError, renderHuman, renderJson } from "./output.js";
-import type { ParsedResponse, SavedFile } from "./types.js";
+import { renderError, renderHuman, renderJson, renderVideoHuman, renderVideoJson } from "./output.js";
+import type { ParsedResponse, SavedFile, VideoResult } from "./types.js";
 
 const PARTIAL_NOTE = /2 file\(s\) written, 1 failed/;
 
@@ -207,7 +207,100 @@ describe("renderJson", () => {
   });
 });
 
+function savedVideo(overrides: Partial<SavedFile> = {}): SavedFile {
+  return {
+    path: "/tmp/out/volcengine-doubao-seedance-1-0-pro-250528-20261028-101500-0.mp4",
+    url: "https://cdn.example.com/v.mp4",
+    index: 0,
+    meta: { url: "https://cdn.example.com/v.mp4", duration: 5, resolution: "720p" },
+    ...overrides,
+  };
+}
+
+function videoResult(overrides: Partial<VideoResult> = {}): VideoResult {
+  return {
+    saved: [],
+    taskId: "cgt-1",
+    status: "succeeded",
+    response: { url: "https://cdn.example.com/v.mp4", duration: 5, resolution: "720p" },
+    ...overrides,
+  };
+}
+
+describe("renderVideoJson", () => {
+  it("carries task_id, status and the per-file metadata the task reported", () => {
+    const payload = JSON.parse(
+      renderVideoJson(videoResult({ saved: [savedVideo()], requestId: "req-1", usage: { completion_tokens: 108900 } })),
+    );
+
+    expect(payload).toEqual({
+      ok: true,
+      task_id: "cgt-1",
+      status: "succeeded",
+      files: [
+        {
+          path: "/tmp/out/volcengine-doubao-seedance-1-0-pro-250528-20261028-101500-0.mp4",
+          index: 0,
+          url: "https://cdn.example.com/v.mp4",
+          duration: 5,
+          resolution: "720p",
+        },
+      ],
+      errors: [],
+      usage: { completion_tokens: 108900 },
+      request_id: "req-1",
+    });
+    expect(payload).not.toHaveProperty("partial");
+  });
+
+  it("stays ok with no files while the task is still running", () => {
+    const payload = JSON.parse(renderVideoJson(videoResult({ status: "running", response: undefined })));
+
+    expect(payload).toEqual({ ok: true, task_id: "cgt-1", status: "running", files: [], errors: [] });
+  });
+
+  it("omits optional fields rather than writing nulls", () => {
+    const payload = JSON.parse(renderVideoJson(videoResult({ saved: [savedVideo({ meta: undefined })] })));
+
+    expect(payload.files[0]).toEqual({
+      path: "/tmp/out/volcengine-doubao-seedance-1-0-pro-250528-20261028-101500-0.mp4",
+      index: 0,
+      url: "https://cdn.example.com/v.mp4",
+    });
+    expect(payload).not.toHaveProperty("usage");
+    expect(payload).not.toHaveProperty("request_id");
+  });
+});
+
+describe("renderVideoHuman", () => {
+  it("prints the saved path, and the task id when there is no file yet", () => {
+    const saved = renderVideoHuman(videoResult({ saved: [savedVideo()] }));
+    expect(saved).toEqual({
+      stdout: "/tmp/out/volcengine-doubao-seedance-1-0-pro-250528-20261028-101500-0.mp4",
+      stderr: "",
+    });
+
+    const running = renderVideoHuman(videoResult({ status: "running", response: undefined }));
+    expect(running).toEqual({ stdout: "cgt-1", stderr: "" });
+  });
+});
+
 describe("renderError", () => {
+  it("publishes the task id of a paid-but-unfinished task in the JSON envelope", () => {
+    const rendered = renderError(new ApiError("task cgt-1 is still running", "TaskNotFinished", "cgt-1"), true);
+
+    expect(JSON.parse(rendered.stdout)).toEqual({
+      error: { message: "task cgt-1 is still running", code: "TaskNotFinished", task_id: "cgt-1" },
+    });
+    expect(rendered.exitCode).toBe(1);
+  });
+
+  it("leaves the error envelope alone for an error that carries no task id", () => {
+    const rendered = renderError(new ApiError("boom", "X"), true);
+
+    expect(JSON.parse(rendered.stdout)).toEqual({ error: { message: "boom", code: "X" } });
+  });
+
   it("maps UsageError to exit 2 with the message on stderr in human mode", () => {
     const result = renderError(new UsageError("bad flag: --nope"), false);
 

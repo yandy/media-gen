@@ -1,5 +1,5 @@
 import { ApiError, UsageError } from "./errors.js";
-import type { ParsedResponse, SavedFile, SavedMedia } from "./types.js";
+import type { ParsedResponse, SavedFile, SavedMedia, VideoResult } from "./types.js";
 
 export interface RenderedOutput {
   stdout: string;
@@ -84,6 +84,74 @@ export function renderJson(saved: SavedFile[], res: ParsedResponse): string {
   return JSON.stringify(payload);
 }
 
+interface JsonVideoFile {
+  path: string;
+  index: number;
+  url: string;
+  duration?: number;
+  resolution?: string;
+}
+
+/**
+ * The video envelope. It has no `partial`: one request makes one video, so a run
+ * either produced a file or raised. `ok` means "the command succeeded" — a task that
+ * was created and is still running is `ok: true` with `files: []`, because reporting
+ * it as a failure invites the caller to submit the paid task again.
+ */
+interface JsonVideoPayload {
+  ok: boolean;
+  task_id: string;
+  status: VideoResult["status"];
+  files: JsonVideoFile[];
+  errors: { code: string; message: string }[];
+  usage?: Record<string, unknown>;
+  request_id?: string;
+}
+
+/** `ImageResult` has `size`; only a video result knows its duration and resolution. */
+function videoExtras(meta: SavedMedia | undefined): { duration?: number; resolution?: string } {
+  const extras: { duration?: number; resolution?: string } = {};
+  if (meta === undefined) return extras;
+  if ("duration" in meta && typeof meta.duration === "number") extras.duration = meta.duration;
+  if ("resolution" in meta && typeof meta.resolution === "string") {
+    extras.resolution = meta.resolution;
+  }
+  return extras;
+}
+
+export function renderVideoJson(result: VideoResult): string {
+  const payload: JsonVideoPayload = {
+    ok: true,
+    task_id: result.taskId,
+    status: result.status,
+    files: result.saved.map((file) => {
+      const extras = videoExtras(file.meta);
+      return {
+        path: file.path,
+        index: file.index,
+        url: file.url,
+        ...(extras.duration === undefined ? {} : { duration: extras.duration }),
+        ...(extras.resolution === undefined ? {} : { resolution: extras.resolution }),
+      };
+    }),
+    errors: [],
+  };
+
+  if (result.usage !== undefined) payload.usage = result.usage;
+  if (result.requestId !== undefined) payload.request_id = result.requestId;
+  return JSON.stringify(payload);
+}
+
+/**
+ * Human mode prints one line of result either way: the saved path, or — while the
+ * task is still running — its id, which is the only handle the caller has. The
+ * "created and paid for" note already went to stderr when the task was created.
+ */
+export function renderVideoHuman(result: VideoResult): RenderedOutput {
+  const lines = result.saved.length > 0 ? result.saved.map((file) => file.path) : [result.taskId];
+  return { stdout: lines.join("\n"), stderr: "" };
+}
+
 /**
  * Maps an error to the CLI exit-code contract: usage errors exit 2, everything
  * else exits 1. JSON payloads go to stdout so agents can parse them reliably.
@@ -93,9 +161,15 @@ export function renderError(err: unknown, json: boolean): RenderedError {
   const exitCode = err instanceof UsageError ? 2 : 1;
 
   if (json) {
-    const error: { message: string; code?: string } = { message };
+    const error: { message: string; code?: string; task_id?: string } = { message };
     if (err instanceof ApiError && err.code !== undefined) {
       error.code = err.code;
+    }
+    // "Paid for, not finished" is not a failure the caller should retry, and the id
+    // is what makes resuming possible — so it travels in the envelope, not only in
+    // the human message the caller would have to scrape.
+    if (err instanceof ApiError && err.taskId !== undefined) {
+      error.task_id = err.taskId;
     }
     return { stdout: JSON.stringify({ error }), stderr: "", exitCode };
   }
