@@ -333,6 +333,23 @@ export interface VideoStatusOptions {
 }
 
 /**
+ * Attaches the task id to a failure that did not carry one, keeping its message, code
+ * and status. Used where a transport error would otherwise leave the caller with an
+ * error that names no task.
+ */
+function withTaskId(cause: unknown, taskId: string): ApiError {
+  if (cause instanceof ApiError && cause.taskId !== undefined) return cause;
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  const code = cause instanceof ApiError ? cause.code : undefined;
+  return new ApiError(
+    `${reason} (task ${safeLine(taskId)})`,
+    code,
+    taskId,
+    causeStatus(cause),
+  );
+}
+
+/**
  * One look at a task that was created earlier — the way back into a paid task whose
  * run was interrupted, and the only command that does not create anything.
  *
@@ -345,6 +362,12 @@ export async function runVideoStatus(
   opts: VideoStatusOptions,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<VideoResult> {
+  // An empty id would build ".../tasks/" and come back 404, blaming the provider for
+  // something the caller can see is missing. Same rule as an empty prompt.
+  const id = taskId.trim();
+  if (id === "") {
+    throw new UsageError("a task id is required: pass the id a previous run printed");
+  }
   const baseUrl = opts.baseUrl === undefined ? undefined : normalizeBaseUrl(opts.baseUrl);
 
   const config = loadConfig();
@@ -357,23 +380,26 @@ export async function runVideoStatus(
       ? selection
       : { ...selection, provider: { ...selection.provider, base_url: baseUrl } };
 
-  // Resolved for its side effect: a dialect with no video adapter must say so here,
-  // before a request goes to a host that cannot answer it.
-  getAdapter(binding.dialect, "video");
-
   const auth = resolveApiKey(binding.provider, opts.apiKey, env);
   if (auth === null) throw missingKeyError(binding.provider);
 
-  const outcome = await pollTask({ binding, apiKey: auth.key, taskId });
+  let outcome: Awaited<ReturnType<typeof pollTask>>;
+  try {
+    outcome = await pollTask({ binding, apiKey: auth.key, taskId: id });
+  } catch (error) {
+    // A transport failure says nothing about the task, and the id is the only handle
+    // the caller has on it, so it travels on the error even when nothing was learned.
+    throw withTaskId(error, id);
+  }
 
   if (outcome.state === "failed" || outcome.state === "cancelled" || outcome.state === "expired") {
-    throw taskEndedError(binding, taskId, outcome);
+    throw taskEndedError(binding, id, outcome);
   }
 
   if (outcome.state !== "succeeded") {
     const unfinished: VideoResult = {
       saved: [],
-      taskId,
+      taskId: id,
       status: outcome.state,
       response: undefined,
     };
@@ -389,12 +415,12 @@ export async function runVideoStatus(
     outDir,
     provider: binding.provider.name,
     model: media.model ?? binding.model,
-    taskId,
+    taskId: id,
   });
 
   const result: VideoResult = {
     saved: [saved],
-    taskId,
+    taskId: id,
     status: "succeeded",
     response: media,
   };

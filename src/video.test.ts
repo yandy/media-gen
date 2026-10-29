@@ -496,21 +496,27 @@ describe("runVideoGenerate", () => {
 });
 
 describe("runVideoStatus", () => {
-  it("asks exactly once and downloads nothing while the task is still running", async () => {
+  it("asks exactly once, downloads nothing and creates no directory while running", async () => {
     const stub = scriptedFetch([jsonResponse({ status: "running" })]);
+    const untouched = path.join(tempDir, "never-created");
 
-    const result = await runVideoStatus("cgt-1", { provider: "volcengine" });
+    const result = await runVideoStatus("cgt-1", { provider: "volcengine", outDir: untouched });
 
     expect(result).toMatchObject({ taskId: "cgt-1", status: "running", saved: [] });
     expect(stub.calls).toHaveLength(1);
     expect(stub.calls[0].method).toBe("GET");
+    // Nothing was written, so the out-dir must not appear as a side effect of asking.
+    expect(fs.existsSync(untouched)).toBe(false);
   });
 
   it("downloads the clip and names the file after the model the server reported", async () => {
     scriptedFetch([
+      // A model id config.toml has never heard of: the echo is not validated against
+      // `models`, so this is the only way the assertion below can tell the two sources
+      // apart. With the echo equal to the configured default it would pass either way.
       jsonResponse({
         status: "succeeded",
-        model: "doubao-seedance-2-5-260628",
+        model: "doubao-seedance-9-9-999999",
         content: { video_url: "https://cdn/v.mp4" },
         duration: 5,
       }),
@@ -523,7 +529,7 @@ describe("runVideoStatus", () => {
 
     expect(result.status).toBe("succeeded");
     expect(result.saved).toHaveLength(1);
-    expect(path.basename(result.saved[0].path)).toContain("doubao-seedance-2-5-260628");
+    expect(path.basename(result.saved[0].path)).toContain("doubao-seedance-9-9-999999");
   });
 
   it("does not retry a transient poll failure: one request, one error", async () => {
@@ -532,6 +538,8 @@ describe("runVideoStatus", () => {
     const error = await rejection(runVideoStatus("cgt-1", { provider: "volcengine" }));
 
     expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).taskId).toBe("cgt-1");
+    expect(error.message).toMatch(/502/);
     expect(stub.calls).toHaveLength(1);
   });
 
@@ -547,6 +555,15 @@ describe("runVideoStatus", () => {
       expect(error.message).toContain("vendor says no");
     },
   );
+
+  it("rejects an empty task id without asking the provider", async () => {
+    const stub = scriptedFetch([jsonResponse({ status: "running" })]);
+
+    const error = await rejection(runVideoStatus("   ", { provider: "volcengine" }));
+
+    expect(error).toBeInstanceOf(UsageError);
+    expect(stub.calls).toHaveLength(0);
+  });
 
   it("refuses a task id it cannot look up without inventing a state", async () => {
     scriptedFetch([new Response("", { status: 404 })]);

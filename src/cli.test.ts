@@ -2014,6 +2014,14 @@ describe("video status", () => {
     expect(result.stderr).toContain("cgt-1");
   });
 
+  it("rejects an empty task id without a request", async () => {
+    const result = await run(["video", "status", "", "--provider", "volcengine", "--api-key", VIDEO_KEY]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("task id is required");
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
   it("says it asks once and spends nothing", async () => {
     const help = (await run(["video", "status", "--help"])).stdout;
 

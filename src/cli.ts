@@ -204,8 +204,8 @@ Subcommands:
   video status      look at one task once, and save its video if it finished
 
 Exit codes: 0 success — including a partial image success that saved at least one
-file, or a video task that was created and is still running; 1 an
-API/config/runtime failure, 2 a usage error.
+file, a video task that was created and is still running, or a video task that was
+merely read; 1 an API/config/runtime failure, 2 a usage error.
 
 Run "mediagen image generate --help" or "mediagen video generate --help" for the flag
 list, the model table and examples.`;
@@ -411,17 +411,18 @@ Examples:
 function videoStatusHelpText(): string {
   return `
 Look at one video task once, by the id a previous run printed. Nothing is created and
-nothing is billed: this is the way back into a task whose run was interrupted, and the
-only command that cannot spend money.
+nothing is billed: this is the way back into a task whose run was interrupted.
 
 It asks once. A task that is still pending or running is a success (exit 0) with its id
-and no files, so a caller can poll this command on its own schedule. A task that has
+and no files, so a caller can poll this command on its own schedule. Of the commands that
+talk to a provider, this is the only one that cannot spend money. A task that has
 finished is downloaded to --out-dir. A task that failed, was cancelled or expired exits 1
 with the vendor's own message.
 
 Flags not passed here are taken from config.toml: the provider from default_provider, the
-model from that provider's video table (the model only picks the account and endpoint —
-the task id decides everything else).
+model from that provider's video table. The provider picks the account and the endpoint;
+--model is only checked against config.toml and is not sent, because the task id decides
+everything else.
 
 Examples:
   mediagen video status cgt-20261028-abcd --provider volcengine
