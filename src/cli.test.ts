@@ -1937,6 +1937,9 @@ describe("video generate", () => {
     expect(help).toContain("--no-wait");
     // Both dialects are registered now, so both may be named.
     expect(help).toContain("MiniMax-H3");
+    // --seed is ark-only, so the variant advice must say so.
+    expect(help).toContain("Ark-only flags");
+    expect(help).toContain("--seed");
     expect(help).toContain("video status");
 
     // The root help is where someone decides whether to run this at all, so the

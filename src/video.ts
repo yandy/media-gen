@@ -131,15 +131,13 @@ function firstFrame(images: readonly string[]): string | undefined {
 }
 
 /**
- * Dialect layer for the flags that are dialect-specific: a dialect declares the
- * wire fields it accepts in `exclusiveFields`, and anything else it is handed
- * must fail here rather than be ignored by the create endpoint after it charged.
- * The wording mirrors the image path's message for the same mistake.
- */
-/**
- * The optional request fields that are dialect-specific rather than shared. Every
- * dialect must declare the ones it accepts; the rest are rejected locally, so a flag
- * from another vendor fails before the request instead of being silently paid for.
+ * Dialect layer for the flags that are dialect-specific: a dialect declares the wire
+ * fields it accepts in `exclusiveFields`, and anything else it is handed fails here
+ * rather than being ignored by the create endpoint after it charged. The wording
+ * mirrors the image path's message for the same mistake.
+ *
+ * This list must name every such field. Every dialect declares the ones it accepts;
+ * the rest are rejected locally.
  *
  * This list must name every such field: an unlisted one escapes the check entirely and
  * is dropped on the floor by any dialect that does not serialize it. `seed` was exactly

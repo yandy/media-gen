@@ -380,14 +380,16 @@ Cost and interruption:
   the id is also written to stderr right after the task is created.
 
 One video per request:
-  --n belongs to image; here it is not an option at all. For a second variant, run
-  the command again — with a different --seed if you want it to differ.
+  --n belongs to image; here it is not an option at all. For a second variant, run the
+  command again (add a different --seed on the ark dialect if you want it to differ).
 
 Flags the vendor checks, not this CLI:
   --resolution --duration are passed through; whether a given model supports a tier or
   a range is validated by the vendor when the task is created, before anything is billed.
-  --generate-audio and --output-format are ark-only, and --watermark is ark-only too:
-  the minimax dialect rejects them before any request.
+
+Ark-only flags, rejected locally by any other dialect:
+  --seed --generate-audio --output-format --watermark. The minimax API takes only the
+  model, the content, the resolution, the duration and the ratio.
 
 Output:
   Files are written to --out-dir (default: config output_dir, else the current

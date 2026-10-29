@@ -263,7 +263,7 @@ export interface VideoRequest {
   resolution?: string;           // 已归一化为小写，如 "720p" / "768p" / "2k"
   ratio?: string;                // "16:9" | "4:3" | "1:1" | "3:4" | "9:16" | "21:9" | "adaptive"
   duration?: number;             // 秒，正整数
-  seed?: number;
+  seed?: number;                 // ark 专属（`exclusiveFields`），minimax 本地拒绝
   watermark?: boolean;
   generate_audio?: boolean;      // ark 2.0/2.5；minimax 拒绝
   output_format?: "mp4" | "mov"; // ark 2.5；minimax 拒绝

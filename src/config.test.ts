@@ -900,9 +900,11 @@ default = "MiniMax-H3"
 models = ["MiniMax-H3"]
 `);
 
-    expect(() => resolveSelection({ provider: "mm", task: "video" }, loadConfig())).toThrow(
-      /it points at the sub-path "\/v2"/,
-    );
+    const error = thrownBy(() => resolveSelection({ provider: "mm", task: "video" }, loadConfig()));
+
+    expect(error.message).toContain('it points at the sub-path "/v2"');
+    // A one-segment API root still yields a concrete suggestion, not the placeholder.
+    expect(error.message).toContain('"/video_generation"');
   });
 });
 

@@ -505,7 +505,7 @@ export function validateProviderShape(name: string, config: TaskConfig): Provide
     throw new ConfigError(
       `unknown provider "${name}": no [providers.${tomlKey(name)}] table in ${file}; ` +
         `add one by hand, or run "mediagen config add ${shellArg(name)} ` +
-        `--api-type <openai|dashscope|ark> --base-url <origin> --model <id>"`,
+        `--api-type <openai|dashscope|ark|minimax> --base-url <origin> --model <id>"`,
     );
   }
 

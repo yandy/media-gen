@@ -65,6 +65,7 @@ describe("minimax video request", () => {
     ["watermark", { watermark: true }],
     ["generate_audio", { generate_audio: true }],
     ["output_format", { output_format: "mov" }],
+    ["seed", { seed: 42 }],
   ];
 
   it.each(rejected)("rejects %s, which this dialect does not accept", (field, extra) => {
@@ -137,15 +138,18 @@ describe("minimax task id and polling", () => {
     // "cancelled: minimax video task failed" would read as a contradiction.
     expect(minimaxPollOutcome({ task: { status: "cancelled" } })).toEqual({
       state: "cancelled",
-      failure: { message: "minimax task cancelled" },
+      failure: { message: "minimax reported no message" },
     });
     expect(minimaxPollOutcome({ task: { status: "failed" } })).toEqual({
       state: "failed",
-      failure: { message: "minimax task failed" },
+      failure: { message: "minimax reported no message" },
     });
     expect(
       minimaxPollOutcome({ task: { status: "failed", error: { type: "server_error", message: "  " } } }),
-    ).toEqual({ state: "failed", failure: { code: "server_error", message: "minimax task failed" } });
+    ).toEqual({
+      state: "failed",
+      failure: { code: "server_error", message: "minimax reported no message" },
+    });
   });
 
   it("rejects a succeeded task without a url, an unknown status, and a missing task", () => {

@@ -22,7 +22,7 @@ import type {
  * registry already expresses the policy (`exclusiveFields: []`); this list is the
  * direct-call guard, so the two must agree.
  */
-const UNSUPPORTED_FIELDS = ["watermark", "generate_audio", "output_format"] as const satisfies readonly (
+const UNSUPPORTED_FIELDS = ["watermark", "generate_audio", "output_format", "seed"] as const satisfies readonly (
   | keyof VideoRequest
 )[];
 
@@ -93,7 +93,9 @@ function minimaxFailure(
   status: string,
   error: unknown,
 ): { code?: string; message: string } {
-  const fallback = `minimax task ${status}`;
+  // The engine already prints the state, so the fallback must not repeat it: the
+  // useful thing to say is that the vendor explained nothing.
+  const fallback = "minimax reported no message";
   if (isRecord(error)) {
     const message =
       typeof error.message === "string" && error.message.trim() !== "" ? error.message : fallback;
