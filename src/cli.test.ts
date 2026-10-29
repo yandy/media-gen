@@ -1639,8 +1639,8 @@ models = ["doubao-seedance-1-0-pro"]
 
   it("does not confuse an unfinished base_url with a missing adapter", async () => {
     // A hand-written `<workspace-id>` host cannot produce an endpoint — but the
-    // openai dialect *does* have an image adapter, and "(no adapter yet)" there
-    // would send the user hunting for a code change.
+    // openai dialect *does* serve images, and a missing-adapter note there would
+    // send the user hunting for a code change.
     writeConfig(
       '[providers.aliyun]\nbase_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"\napi_key_env = "DASHSCOPE_API_KEY"\n\n[providers.aliyun.image]\napi_type = "openai"\ndefault = "qwen-image-3.0"\nmodels = ["qwen-image-3.0"]\n\n[providers.aliyun.video]\napi_type = "dashscope"\ndefault = "qwen-video"\nmodels = ["qwen-video"]\n',
     );
@@ -1649,7 +1649,10 @@ models = ["doubao-seedance-1-0-pro"]
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("endpoint: (base_url is not a URL yet)");
-    expect(result.stdout.match(/\(no adapter yet\)/g) ?? []).toHaveLength(1);
+    // The dashscope dialect has no video task, and the note says so rather than
+    // promising one later.
+    expect(result.stdout).toContain("(the dashscope dialect has no video task)");
+    expect(result.stdout).not.toContain("no adapter yet");
   });
 
   it("prints a task's path override and the URL it produces", async () => {

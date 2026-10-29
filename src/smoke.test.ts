@@ -316,7 +316,15 @@ describe("smoke: the seeded config", () => {
       "doubao-seedream-5-0-flash-260915",
       "doubao-seedream-5-0-pro",
     ]);
-    expect(config.providers.volcengine.tasks.video?.models).toEqual(["doubao-seedance-1-0-pro"]);
+    expect(config.providers.volcengine.tasks.video?.models).toEqual([
+      "doubao-seedance-1-0-pro-250528",
+    ]);
+    // The second video dialect ships too, so both are runnable out of the box.
+    expect(config.providers.minimax.tasks.video).toEqual({
+      api_type: "minimax",
+      default: "MiniMax-H3",
+      models: ["MiniMax-H3", "MiniMax-H3-Max"],
+    });
   });
 
   it("keeps an unusable aliyun entry from blocking volcengine", async () => {

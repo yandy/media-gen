@@ -1178,14 +1178,14 @@ function runConfigShow(flags: { json?: boolean }): void {
       }
       // A task with no adapter has no endpoint to show: the path belongs to the
       // adapter, and inventing one here would be a second source of truth.
-      // Naming the missing half matters: "(no adapter yet)" on a task that has
+      // Naming the missing half matters: a dialect note on a task that has
       // one, but a placeholder host, sends the user looking for the wrong fix.
       if (taskView.endpoint !== undefined) {
         lines.push(`      endpoint: ${taskView.endpoint} (computed)`);
       } else {
         // Keeps the `endpoint:` prefix so a reader can grep for the one line that
         // says whether a URL exists at all.
-        lines.push(`      endpoint: (${taskView.endpoint_note ?? "no adapter yet"})`);
+        lines.push(`      endpoint: (${taskView.endpoint_note ?? "no endpoint"})`);
       }
     }
   }
@@ -1290,7 +1290,9 @@ function buildProviderView(name: string, entry: ProviderEntry): ProviderView {
       if (effectiveDialect === undefined) {
         taskView.endpoint_note = "api_type is not set";
       } else if (path === undefined) {
-        taskView.endpoint_note = "no adapter yet";
+        // Not "yet": this dialect is not going to grow this task. Saying so is the
+        // difference between "edit your config" and "wait for a release".
+        taskView.endpoint_note = `the ${effectiveDialect} dialect has no ${task} task`;
       } else if (base === undefined) {
         taskView.endpoint_note = "base_url is not a URL yet";
       } else if (block.path === undefined && vendorPathIssue(base) !== undefined) {

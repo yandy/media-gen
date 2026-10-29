@@ -1,12 +1,13 @@
 ---
 name: mediagen
-description: Use this skill whenever the user wants an image generated, created, drawn, illustrated, edited, modified, restyled, recoloured, upscaled, or composed from reference pictures — "draw me a picture", "generate a logo", "edit this photo", "make this image blue", "put this character in that scene", "render this text into an image". It drives the `mediagen` CLI, which calls Alibaba Bailian qwen-image and Volcengine Ark doubao/seedream image models and saves the results as local files.
+description: Use this skill whenever the user wants an image or a short video generated, created, drawn, illustrated, edited, modified, restyled, recoloured, upscaled, or composed from reference pictures — "draw me a picture", "generate a logo", "edit this photo", "make this image blue", "put this character in that scene", "render this text into an image", "make a video of this", "animate this photo", "generate a clip". It drives the `mediagen` CLI, which calls Alibaba Bailian qwen-image and Volcengine Ark doubao/seedream image models, and Volcengine Ark doubao/seedance or MiniMax H3 for video, saving the results as local files.
 ---
 
-# mediagen: generate and edit images
+# mediagen: generate and edit images, and generate video
 
-`mediagen` is a small, non-interactive image CLI: it writes every result to a local
-file and prints the path. Each successful call is a paid API request.
+`mediagen` is a small, non-interactive media CLI: it writes every result to a local
+file and prints the path. Each successful call is a paid API request — and for video,
+the money is spent when the task is created, minutes before the clip exists.
 
 ## When to use it
 
@@ -14,10 +15,13 @@ file and prints the path. Each successful call is a paid API request.
 - A change to an existing image: restyle, recolour, add or remove something,
   combine several references, upscale (pass `--image` plus a larger `--size`),
   or render text (CJK or Latin) into an image.
+- A short video from text, or from one first frame: `video generate` (see below).
 
 ## When not to use it
 
-- Video, audio, or documents: this build is image-only.
+- Audio, or documents: this build makes images and video only.
+- Long-form video, editing an existing clip, or joining clips: only short generated
+  clips are supported.
 - Describing or analysing an image: `mediagen` writes images, it cannot see them.
 - Local pixel work (crop, resize, convert, compress): use an image tool
   instead — `mediagen` spends money and round-trips to a vendor.
@@ -25,9 +29,8 @@ file and prints the path. Each successful call is a paid API request.
 ## One-time setup
 
 Nothing is built in: a provider is declared in `config.toml`, which any command
-creates on first use (with two entries, `aliyun` and `volcengine`, plus commented
-examples for a gateway) and
-then validates before it runs.
+creates on first use (with three entries — `aliyun`, `volcengine`, `minimax` — plus
+commented examples for a gateway) and then validates before it runs.
 
 ```bash
 mediagen config show        # prints what resolves; any command creates config.toml on first use
@@ -110,6 +113,43 @@ request; **ark fans
 out into one paid request per image** (seeded `seed`, `seed+1`, ...), so `--n 4`
 on ark costs four requests. Keep `--n` at 1 while iterating on a prompt.
 
+## Video
+
+Video is asynchronous, and the order of events matters more than the flags:
+
+1. `video generate` **creates and pays for a task**, then writes the task id to stderr
+   and polls until the clip exists. Two to five minutes is normal; the budget is the
+   task's `timeout_seconds` (default 1800 s).
+2. The clip URL is good for 24 hours, and the task id for days, so a paid task can
+   always be collected later with `video status <id>`.
+
+```bash
+# wait for it (humans, and agents whose timeout is longer than a few minutes)
+mediagen video generate "a red fox running through deep snow, golden hour" --out-dir ./clips
+
+# do not wait: create it, take the id, and collect it in a later step
+mediagen video generate "a slow pan over a frozen lake" --no-wait --json
+
+# collect it later — nothing is created and nothing is billed
+mediagen video status <task-id> --json
+```
+
+**Prefer `--no-wait` when your own command timeout is short.** A blocking
+`video generate` that you kill mid-poll leaves a paid task behind; the id on stderr is
+the only handle on it, and re-running the command pays twice for the same clip.
+
+`video status` asks once and never waits: `status: "pending"`/`"running"` is a normal
+answer (exit 0, `files: []`), so poll it on your own schedule. When it reports
+`succeeded` it downloads the clip and prints the path.
+
+Video models: `doubao-seedance-1-0-pro-250528` on `--provider volcengine`, or
+`MiniMax-H3` on `--provider minimax`. Each dialect has its own resolution tiers
+(`ark`: 480p/720p/1080p/4k; `minimax`: 480p/768p/2k) — a tier the dialect lacks exits
+2 locally, while which tier a *model* supports is the vendor's check at create time,
+before billing. One clip per request: there is no `--n`. `--seed`,
+`--generate-audio`, `--output-format` and `--watermark` are ark-only, and any other
+dialect rejects them before sending.
+
 ## Reading the result
 
 - Exit 0: success. `--json` gives `{ok, partial, files[{path,index,url}], errors[], usage, request_id}`.
@@ -121,13 +161,23 @@ on ark costs four requests. Keep `--n` at 1 while iterating on a prompt.
   `--out-dir` that cannot be created, or a vendor-specific flag sent to the
   wrong dialect). Fix the command; nothing was sent or paid for.
 
+Video adds one rule that is easy to get wrong: **`ok` means the command succeeded, not
+that a file exists.** A video envelope is
+`{ok, task_id, status, files[{path,index,url,duration,resolution}], errors[], usage}`,
+with no `partial`. `--no-wait`, and a `video status` that finds the task still running,
+are `{"ok":true,...,"files":[]}` with exit 0 — read `status` to decide whether to come
+back, and never treat `files: []` as a failure to retry. A budget that runs out raises
+an error carrying `task_id` and code `TaskNotFinished`: collect it with
+`video status <id>`, do not submit it again.
+
 Boolean flags take an explicit value: `--watermark false`, not `--no-watermark`.
 
 ## Rules
 
 1. Report the saved file path(s) back to the user, exactly as printed. That is
    the deliverable — a generation the user cannot find was wasted money.
-2. Never re-run a request that already produced files; retry only a clean failure.
+2. Never re-run a request that already produced files, and never re-submit a video
+   task whose id you have; retry only a clean failure that produced no task at all.
 3. Never print an API key, and never invent flags: everything supported is
    listed by `mediagen image generate --help` (flags, sizes, vendor-specific
    options, examples) and `mediagen image edit --help`.

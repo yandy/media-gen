@@ -191,7 +191,7 @@ describe("prepareConfigFile", () => {
     expect(fs.existsSync(configPath())).toBe(true);
     const config = loadConfig();
     expect(config.default_provider).toBe("volcengine");
-    expect(Object.keys(config.providers).sort()).toEqual(["aliyun", "volcengine"]);
+    expect(Object.keys(config.providers).sort()).toEqual(["aliyun", "minimax", "volcengine"]);
     expect(config.providers.volcengine).toEqual({
       base_url: "https://ark.cn-beijing.volces.com",
       api_key_env: "ARK_API_KEY",
@@ -205,8 +205,8 @@ describe("prepareConfigFile", () => {
         },
         video: {
           api_type: "ark",
-          default: "doubao-seedance-1-0-pro",
-          models: ["doubao-seedance-1-0-pro"],
+          default: "doubao-seedance-1-0-pro-250528",
+          models: ["doubao-seedance-1-0-pro-250528"],
         },
       },
     });
