@@ -6,7 +6,12 @@ import { ArkVideoDialect } from "./api/ark.js";
 import { writeConfigFile } from "./config.js";
 import { ApiError, ConfigError, UsageError } from "./errors.js";
 import type { AsyncTaskAdapter, VideoDeps } from "./types.js";
-import { buildVideoRequest, runVideoGenerate, validateResolution } from "./video.js";
+import {
+  buildVideoRequest,
+  runVideoGenerate,
+  runVideoStatus,
+  validateResolution,
+} from "./video.js";
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02]);
 
@@ -487,5 +492,67 @@ describe("runVideoGenerate", () => {
     expect((error as ApiError).taskId).toBe("cgt-1");
     expect(error.message).toContain("cgt-1");
     expect(error.message).toContain("status 500");
+  });
+});
+
+describe("runVideoStatus", () => {
+  it("asks exactly once and downloads nothing while the task is still running", async () => {
+    const stub = scriptedFetch([jsonResponse({ status: "running" })]);
+
+    const result = await runVideoStatus("cgt-1", { provider: "volcengine" });
+
+    expect(result).toMatchObject({ taskId: "cgt-1", status: "running", saved: [] });
+    expect(stub.calls).toHaveLength(1);
+    expect(stub.calls[0].method).toBe("GET");
+  });
+
+  it("downloads the clip and names the file after the model the server reported", async () => {
+    scriptedFetch([
+      jsonResponse({
+        status: "succeeded",
+        model: "doubao-seedance-2-5-260628",
+        content: { video_url: "https://cdn/v.mp4" },
+        duration: 5,
+      }),
+      videoBytes(),
+    ]);
+
+    // The binding's model is whatever config.toml defaults to — the id decides which
+    // task ran, so the name on disk must follow the server's echo, not the config.
+    const result = await runVideoStatus("cgt-1", { provider: "volcengine" });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.saved).toHaveLength(1);
+    expect(path.basename(result.saved[0].path)).toContain("doubao-seedance-2-5-260628");
+  });
+
+  it("does not retry a transient poll failure: one request, one error", async () => {
+    const stub = scriptedFetch([new Response("", { status: 502 })]);
+
+    const error = await rejection(runVideoStatus("cgt-1", { provider: "volcengine" }));
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(stub.calls).toHaveLength(1);
+  });
+
+  it.each(["failed", "cancelled", "expired"])(
+    "raises a terminal %s with the task id",
+    async (status) => {
+      scriptedFetch([jsonResponse({ status, error: { code: "X", message: "vendor says no" } })]);
+
+      const error = await rejection(runVideoStatus("cgt-1", { provider: "volcengine" }));
+
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).taskId).toBe("cgt-1");
+      expect(error.message).toContain("vendor says no");
+    },
+  );
+
+  it("refuses a task id it cannot look up without inventing a state", async () => {
+    scriptedFetch([new Response("", { status: 404 })]);
+
+    const error = await rejection(runVideoStatus("cgt-1", { provider: "volcengine" }));
+
+    expect(error.message).toMatch(/--provider/);
   });
 });

@@ -29,7 +29,13 @@ import {
 } from "./config.js";
 import { ConfigError, UsageError } from "./errors.js";
 import { runGenerate, type GenerateOptions } from "./generate.js";
-import { RATIOS, runVideoGenerate, type VideoOptions } from "./video.js";
+import {
+  RATIOS,
+  runVideoGenerate,
+  runVideoStatus,
+  type VideoOptions,
+  type VideoStatusOptions,
+} from "./video.js";
 import {
   renderError,
   renderHuman,
@@ -164,6 +170,15 @@ interface VideoFlags {
   wait?: boolean;
 }
 
+interface StatusFlags {
+  provider?: string;
+  model?: string;
+  outDir?: string;
+  json?: boolean;
+  apiKey?: string;
+  baseUrl?: string;
+}
+
 const ROOT_HELP = `
 Built for AI agents: explicit flags, no interactive prompts, machine-readable output.
 
@@ -176,6 +191,7 @@ Quickstart:
   mediagen image generate "..." --json               # {"ok":..,"files":[..],"errors":[..]}
   mediagen video generate "a fox running through deep snow" --provider volcengine
   mediagen video generate "..." --no-wait --json     # returns the task id immediately
+  mediagen video status <task-id>                    # check a task you already paid for
 
 Subcommands:
   login / logout    store or remove a provider's API key in auth.json; provider
@@ -185,6 +201,7 @@ Subcommands:
   config path       where config.toml lives
   config add        create a provider in config.toml (edit the file for anything else)
   video generate    create and pay for a video task, then save the result
+  video status      look at one task once, and save its video if it finished
 
 Exit codes: 0 success — including a partial image success that saved at least one
 file, or a video task that was created and is still running; 1 an
@@ -357,9 +374,9 @@ Models (--provider picks the account, --model the exact id; config.toml decides 
 
 Cost and interruption:
   The task is paid for when it is created. If this process is interrupted, do not
-  submit again: the task keeps running for a while and can still be fetched by its
-  id. --no-wait prints that id immediately for exactly this reason, and the id is
-  also written to stderr right after the task is created.
+  submit again: the task keeps running for a while, and "mediagen video status <id>"
+  fetches it later. --no-wait prints that id immediately for exactly this reason, and
+  the id is also written to stderr right after the task is created.
 
 One video per request:
   --n belongs to image; here it is not an option at all. For a second variant, run
@@ -384,7 +401,32 @@ Examples:
   mediagen video generate "the same fox, now shaking the snow off" --image ./fox.png --provider volcengine
 
   # do not wait: hand the task id to a later step (an agent usually wants this)
-  mediagen video generate "a slow pan over a frozen lake" --provider volcengine --no-wait --json`;
+  mediagen video generate "a slow pan over a frozen lake" --provider volcengine --no-wait --json
+
+  # collect it afterwards, without paying again
+  mediagen video status cgt-20261028-abcd --provider volcengine --out-dir ./clips`;
+}
+
+/** The body of `video status --help`. */
+function videoStatusHelpText(): string {
+  return `
+Look at one video task once, by the id a previous run printed. Nothing is created and
+nothing is billed: this is the way back into a task whose run was interrupted, and the
+only command that cannot spend money.
+
+It asks once. A task that is still pending or running is a success (exit 0) with its id
+and no files, so a caller can poll this command on its own schedule. A task that has
+finished is downloaded to --out-dir. A task that failed, was cancelled or expired exits 1
+with the vendor's own message.
+
+Flags not passed here are taken from config.toml: the provider from default_provider, the
+model from that provider's video table (the model only picks the account and endpoint —
+the task id decides everything else).
+
+Examples:
+  mediagen video status cgt-20261028-abcd --provider volcengine
+  mediagen video status cgt-20261028-abcd --provider volcengine --json
+  mediagen video status cgt-20261028-abcd --provider volcengine --out-dir ./clips`;
 }
 
 /** Adds the flags of `video generate`. There is no --n and no --size: see videoHelpText(). */
@@ -517,6 +559,22 @@ export function createProgram(options: ProgramOptions = {}): Command {
     await runVideo(prompt, flags);
   });
 
+  const videoStatus = video
+    .command("status")
+    .description("Look at one video task once, and save its video if it finished")
+    .argument("<task-id>", "the id a previous run printed");
+  videoStatus
+    .option("--provider <name>", VIDEO_OPTION_HELP.provider)
+    .option("--model <id>", VIDEO_OPTION_HELP.model)
+    .option("--out-dir <dir>", VIDEO_OPTION_HELP.outDir)
+    .option("--json", VIDEO_OPTION_HELP.json)
+    .option("--api-key <key>", VIDEO_OPTION_HELP.apiKey)
+    .option("--base-url <url>", VIDEO_OPTION_HELP.baseUrl)
+    .addHelpText("after", videoStatusHelpText());
+  videoStatus.action(async (taskId: string, flags: StatusFlags) => {
+    await runVideoStatusCommand(taskId, flags);
+  });
+
   return program;
 }
 
@@ -633,6 +691,23 @@ async function runImage(prompt: string, flags: ImageFlags, edit: boolean): Promi
 
 async function runVideo(prompt: string, flags: VideoFlags): Promise<void> {
   const result = await runVideoGenerate(prompt, toVideoOptions(flags));
+
+  if (flags.json === true) {
+    writeLine(renderVideoJson(result));
+    return;
+  }
+  emit(renderVideoHuman(result));
+}
+
+async function runVideoStatusCommand(taskId: string, flags: StatusFlags): Promise<void> {
+  const options: VideoStatusOptions = {
+    provider: flags.provider,
+    model: flags.model,
+    outDir: flags.outDir,
+    apiKey: flags.apiKey,
+    baseUrl: flags.baseUrl,
+  };
+  const result = await runVideoStatus(taskId, options);
 
   if (flags.json === true) {
     writeLine(renderVideoJson(result));

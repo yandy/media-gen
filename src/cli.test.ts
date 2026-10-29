@@ -1935,10 +1935,10 @@ describe("video generate", () => {
 
     expect(help).toContain("doubao-seedance-1-0-pro-250528");
     expect(help).toContain("--no-wait");
-    // Nothing this commit does not have may appear in help: no second dialect, and no
-    // command that is added by a later task.
+    // Nothing this commit does not have may appear in help: the second dialect
+    // arrives with its own task. `video status` is implemented, so it may be named.
     expect(help).not.toContain("MiniMax");
-    expect(help).not.toContain("video status");
+    expect(help).toContain("video status");
 
     // The root help is where someone decides whether to run this at all, so the
     // fact that creating a task is what costs money belongs there too.
@@ -1946,5 +1946,78 @@ describe("video generate", () => {
     expect(root).toContain("video generate");
     expect(root).toContain("pay for a video task");
     expect(root).toContain("mediagen video generate --help");
+  });
+});
+
+describe("video status", () => {
+  beforeEach(() => {
+    writeConfig(VIDEO_CONFIG);
+  });
+
+  it("asks once and reports a running task as a success with no files", async () => {
+    const stub = stubVideoFetch([jsonResponse({ status: "running" })]);
+
+    const result = await run([
+      "video", "status", "cgt-1", "--provider", "volcengine",
+      "--api-key", VIDEO_KEY, "--json",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: true, task_id: "cgt-1", status: "running", files: [], errors: [],
+    });
+    expect(stub.calls).toHaveLength(1);
+    expect(stub.calls[0].method).toBe("GET");
+    expect(stub.calls[0].url).toBe(`${VIDEO_CREATE_URL}/cgt-1`);
+  });
+
+  it("downloads the clip when the task has finished", async () => {
+    stubVideoFetch([
+      jsonResponse({ status: "succeeded", model: "doubao-seedance-1-0-pro-250528", content: { video_url: "https://cdn.example.com/v.mp4" } }),
+      mp4Response(),
+    ]);
+
+    const result = await run([
+      "video", "status", "cgt-1", "--provider", "volcengine",
+      "--api-key", VIDEO_KEY, "--out-dir", outDir,
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toMatch(/volcengine-doubao-seedance-1-0-pro-250528-.*-0\.mp4$/);
+  });
+
+  it("names the model the server reported, not the one the config defaults to", async () => {
+    stubVideoFetch([
+      jsonResponse({ status: "succeeded", model: "doubao-seedance-2-5-260628", content: { video_url: "https://cdn.example.com/v.mp4" } }),
+      mp4Response(),
+    ]);
+
+    const result = await run([
+      "video", "status", "cgt-1", "--provider", "volcengine",
+      "--api-key", VIDEO_KEY, "--out-dir", outDir,
+    ]);
+
+    expect(result.stdout).toContain("doubao-seedance-2-5-260628");
+  });
+
+  it("exits 1 and keeps the vendor's message when the task failed", async () => {
+    stubVideoFetch([
+      jsonResponse({ status: "failed", error: { code: "OutputVideoSensitiveContentDetected", message: "blocked by policy" } }),
+    ]);
+
+    const result = await run([
+      "video", "status", "cgt-1", "--provider", "volcengine", "--api-key", VIDEO_KEY,
+    ]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("blocked by policy");
+    expect(result.stderr).toContain("cgt-1");
+  });
+
+  it("says it asks once and spends nothing", async () => {
+    const help = (await run(["video", "status", "--help"])).stdout;
+
+    expect(help).toContain("asks once");
+    expect(help).toContain("nothing is billed");
   });
 });

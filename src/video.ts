@@ -324,6 +324,85 @@ export async function runVideoGenerate(
   return result;
 }
 
+export interface VideoStatusOptions {
+  provider?: string;
+  model?: string;
+  outDir?: string;
+  apiKey?: string;
+  baseUrl?: string;
+}
+
+/**
+ * One look at a task that was created earlier — the way back into a paid task whose
+ * run was interrupted, and the only command that does not create anything.
+ *
+ * It polls exactly once and never loops: waiting is the caller's decision, so a
+ * `running` answer is a normal result (exit 0) rather than a reason to block. No
+ * budget and no retry live here either; one request either answers or fails.
+ */
+export async function runVideoStatus(
+  taskId: string,
+  opts: VideoStatusOptions,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<VideoResult> {
+  const baseUrl = opts.baseUrl === undefined ? undefined : normalizeBaseUrl(opts.baseUrl);
+
+  const config = loadConfig();
+  const selection = resolveSelection(
+    { provider: opts.provider, model: opts.model, task: "video" },
+    config,
+  );
+  const binding: TaskBinding =
+    baseUrl === undefined
+      ? selection
+      : { ...selection, provider: { ...selection.provider, base_url: baseUrl } };
+
+  // Resolved for its side effect: a dialect with no video adapter must say so here,
+  // before a request goes to a host that cannot answer it.
+  getAdapter(binding.dialect, "video");
+
+  const auth = resolveApiKey(binding.provider, opts.apiKey, env);
+  if (auth === null) throw missingKeyError(binding.provider);
+
+  const outcome = await pollTask({ binding, apiKey: auth.key, taskId });
+
+  if (outcome.state === "failed" || outcome.state === "cancelled" || outcome.state === "expired") {
+    throw taskEndedError(binding, taskId, outcome);
+  }
+
+  if (outcome.state !== "succeeded") {
+    const unfinished: VideoResult = {
+      saved: [],
+      taskId,
+      status: outcome.state,
+      response: undefined,
+    };
+    if (outcome.requestId !== undefined) unfinished.requestId = outcome.requestId;
+    return unfinished;
+  }
+
+  const outDir = resolveOutDir(opts.outDir, config.output_dir);
+  ensureOutDir(outDir);
+
+  const media = outcome.result;
+  const saved = await saveVideo(media, {
+    outDir,
+    provider: binding.provider.name,
+    model: media.model ?? binding.model,
+    taskId,
+  });
+
+  const result: VideoResult = {
+    saved: [saved],
+    taskId,
+    status: "succeeded",
+    response: media,
+  };
+  if (media.usage !== undefined) result.usage = media.usage;
+  if (outcome.requestId !== undefined) result.requestId = outcome.requestId;
+  return result;
+}
+
 /**
  * The id reaches the terminal before the first poll, not with the result: if the
  * process is killed while waiting, this line is the only thing that makes the paid
