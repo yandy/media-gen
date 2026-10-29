@@ -191,7 +191,7 @@ describe("prepareConfigFile", () => {
     expect(fs.existsSync(configPath())).toBe(true);
     const config = loadConfig();
     expect(config.default_provider).toBe("volcengine");
-    expect(Object.keys(config.providers).sort()).toEqual(["aliyun", "volcengine"]);
+    expect(Object.keys(config.providers).sort()).toEqual(["aliyun", "minimax", "volcengine"]);
     expect(config.providers.volcengine).toEqual({
       base_url: "https://ark.cn-beijing.volces.com",
       api_key_env: "ARK_API_KEY",
@@ -205,8 +205,8 @@ describe("prepareConfigFile", () => {
         },
         video: {
           api_type: "ark",
-          default: "doubao-seedance-1-0-pro",
-          models: ["doubao-seedance-1-0-pro"],
+          default: "doubao-seedance-1-0-pro-250528",
+          models: ["doubao-seedance-1-0-pro-250528"],
         },
       },
     });
@@ -363,6 +363,28 @@ path = "/images/generations"
     expect(config.providers["ark-plan"].tasks.image?.path).toBe("/images/generations");
   });
 
+  it("strips a trailing slash from a path, but leaves a bare slash alone", () => {
+    const config = taskConfig(`[providers.ark-plan]
+api_type = "ark"
+base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"
+
+[providers.ark-plan.image]
+default = "m"
+models = ["m"]
+path = "/images/generations/"
+
+[providers.ark-plan.video]
+default = "m"
+models = ["m"]
+path = "/"
+`);
+
+    // A trailing slash would yield `/images/generations//{id}` once the id is
+    // appended, so it is gone by the time the value is used.
+    expect(config.providers["ark-plan"].tasks.image?.path).toBe("/images/generations");
+    expect(config.providers["ark-plan"].tasks.video?.path).toBe("/");
+  });
+
   it("rejects a path that is not absolute or carries a query", () => {
     for (const bad of ["images/generations", "/images/generations?x=1", "/a#b", ""]) {
       writeConfig(`[providers.p]
@@ -514,9 +536,16 @@ describe("resolveSelection", () => {
   });
 
   it("rejects a task the dialect has no adapter for", () => {
-    expect(() => resolveSelection({ provider: "volcengine", task: "video" }, taskConfig())).toThrow(
-      'the "ark" dialect has no "video" adapter yet; implemented tasks: image',
-    );
+    writeConfig(`[providers.gw]
+base_url = "https://gw.example.com"
+
+[providers.gw.video]
+api_type = "dashscope"
+default = "v"
+models = ["v"]
+`);
+    expect(() => resolveSelection({ provider: "gw", task: "video" }, loadConfig()))
+      .toThrow('the "dashscope" dialect has no "video" adapter; implemented tasks: image');
   });
 
   it("rejects an empty models list", () => {
@@ -838,6 +867,44 @@ models = ["m"]
     expect(error.message).toContain('"openai"');
     expect(error.message).toContain('"dashscope"');
     expect(error.message).toContain('"ark"');
+    expect(error.message).toContain('"minimax"');
+  });
+
+  it("accepts minimax as a task protocol and resolves a video binding from it", () => {
+    writeConfig(`default_provider = "mm"
+
+[providers.mm]
+base_url = "https://api.minimax.io"
+api_key_env = "MINIMAX_API_KEY"
+
+[providers.mm.video]
+api_type = "minimax"
+default = "MiniMax-H3"
+models = ["MiniMax-H3", "MiniMax-H3-Max"]
+`);
+
+    const binding = resolveSelection({ task: "video" }, loadConfig());
+
+    expect(binding.dialect).toBe("minimax");
+    expect(binding.model).toBe("MiniMax-H3");
+    expect(binding.provider.base_url).toBe("https://api.minimax.io");
+  });
+
+  it("refuses a sub-path on minimax's own host, like the other vendors", () => {
+    writeConfig(`[providers.mm]
+base_url = "https://api.minimax.io/v2"
+
+[providers.mm.video]
+api_type = "minimax"
+default = "MiniMax-H3"
+models = ["MiniMax-H3"]
+`);
+
+    const error = thrownBy(() => resolveSelection({ provider: "mm", task: "video" }, loadConfig()));
+
+    expect(error.message).toContain('it points at the sub-path "/v2"');
+    // A one-segment API root still yields a concrete suggestion, not the placeholder.
+    expect(error.message).toContain('"/video_generation"');
   });
 });
 
@@ -888,11 +955,10 @@ models = ["v"]
 `);
     const config = loadConfig();
     expect(resolveSelection({ provider: "gw", task: "image" }, config).dialect).toBe("dashscope");
-    // The video half resolves to ark, which has no video adapter yet: reaching
-    // that error proves the task's own protocol was the one that applied.
-    expect(thrownBy(() => resolveSelection({ provider: "gw", task: "video" }, config)).message).toMatch(
-      /the "ark" dialect has no "video" adapter yet/,
-    );
+    // The video half keeps the task's own protocol instead of the provider's.
+    const video = resolveSelection({ provider: "gw", task: "video" }, config);
+    expect(video.dialect).toBe("ark");
+    expect(video.model).toBe("v");
   });
 
   it("names the task table when no protocol is declared anywhere", () => {

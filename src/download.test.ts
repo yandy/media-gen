@@ -2,9 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildFilename, downloadImage, inferExtension, uniquePath } from "./download.js";
+import {
+  buildFilename,
+  downloadImage,
+  downloadMedia,
+  inferExtension,
+  uniquePath,
+} from "./download.js";
 import { ApiError } from "./errors.js";
-import type { ImageResult } from "./types.js";
+import type { AsyncTaskResult, ImageResult } from "./types.js";
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
 const HTML_BYTES = Buffer.from("<!doctype html><html><body>proxy blocked</body></html>");
@@ -26,6 +32,11 @@ afterEach(() => {
 
 function imageResult(overrides: Partial<ImageResult> = {}): ImageResult {
   return { url: "https://cdn.example.com/generated.png", ...overrides };
+}
+
+/** A video fixture must carry the async task shape, not an image's optional fields. */
+function videoResult(overrides: Partial<AsyncTaskResult> = {}): AsyncTaskResult {
+  return { url: "https://cdn.example.com/clip.mp4", ...overrides };
 }
 
 function downloadOptions(overrides: Record<string, unknown> = {}) {
@@ -150,6 +161,37 @@ describe("inferExtension", () => {
     expect(inferExtension(imageResult({ outputFormat: "JPEG" }))).toBe("jpg");
     expect(inferExtension(imageResult({ outputFormat: "tiff2" }))).toBe("tiff2");
   });
+
+  it("infers mp4 from a video URL, from a video content type, and as the last resort", () => {
+    expect(inferExtension(videoResult({ url: "https://cdn/x/clip.mp4" }), undefined, "video")).toBe(
+      "mp4",
+    );
+    expect(
+      inferExtension(videoResult({ url: "https://cdn/x/clip" }), "video/quicktime", "video"),
+    ).toBe("mov");
+    expect(inferExtension(videoResult({ url: "https://cdn/x/clip" }), undefined, "video")).toBe(
+      "mp4",
+    );
+  });
+
+    it("prefers the container the vendor declared over a bare URL", () => {
+    // ark can report output_format "mov" while the clip URL carries no suffix; naming
+    // those bytes .mp4 would be a lie about the file.
+    expect(inferExtension({ url: "https://cdn/x/clip", format: "mov" }, undefined, "video")).toBe("mov");
+    expect(inferExtension({ url: "https://cdn/x/clip.mp4", format: "mov" }, undefined, "video")).toBe("mov");
+    // A vendor string that is not a known container falls through to the URL, and one
+    // that could escape the directory is ignored outright.
+    expect(inferExtension({ url: "https://cdn/x/clip.mp4", format: "avi" }, undefined, "video")).toBe("mp4");
+    expect(inferExtension({ url: "https://cdn/x/clip.webm", format: "../../evil" }, undefined, "video")).toBe("webm");
+  });
+
+it("does not read an image extension off a video URL", () => {
+    // A png suffix on a video would name the file after bytes it does not hold.
+    expect(inferExtension({ url: "https://cdn/x/thumb.png" }, "video/mp4", "image")).toBe("png");
+    expect(inferExtension(videoResult({ url: "https://cdn/x/thumb.jpg" }), "video/mp4", "video")).toBe(
+      "mp4",
+    );
+  });
 });
 
 describe("uniquePath", () => {
@@ -179,6 +221,58 @@ describe("uniquePath", () => {
     fs.writeFileSync(file, "first");
 
     expect(uniquePath(file)).toBe(path.join(tempDir, "x-2"));
+  });
+});
+
+describe("downloadMedia", () => {
+  it("names a video file with the provider, model, stamp, index and mp4 suffix", async () => {
+    stubFetch(() => new Response(Buffer.from("fake-mp4"), { status: 200 }));
+
+    const file = await downloadMedia(
+      { url: "https://cdn/x/v.mp4" },
+      {
+        outDir,
+        provider: "volcengine",
+        model: "MiniMax-H3",
+        stamp: "20261028-101500",
+        index: 0,
+        kind: "video",
+      },
+    );
+
+    expect(path.basename(file.path)).toBe("volcengine-minimax-h3-20261028-101500-0.mp4");
+  });
+
+  it("gives a video download its own six-hundred-second deadline", async () => {
+    // A clip is far slower than an image, and the message must state the
+    // deadline that was really used rather than the image one.
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      stubFetch(() => {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      });
+      const file = downloadMedia(
+        { url: "https://cdn/x/v.mp4" },
+        {
+          outDir,
+          provider: "volcengine",
+          model: "MiniMax-H3",
+          stamp: "20261028-101500",
+          index: 0,
+          kind: "video",
+        },
+      );
+
+      const error = await rejection(file);
+
+      // The message is not enough: the deadline really handed to the signal
+      // must be the video one, or a 120s abort would still read as 600s.
+      expect(timeoutSpy).toHaveBeenCalledWith(600_000);
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error.message).toBe("download timeout after 600s for https://cdn/x/v.mp4");
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 });
 

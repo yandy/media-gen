@@ -107,7 +107,11 @@ function expandHome(value: string, home: string): string {
   return value;
 }
 
-function normalizeBaseUrl(value: string): string {
+/**
+ * Shared with the video pipeline: a bad `--base-url` must be refused there with the
+ * same message and before anything is spent, not by a second copy of this rule.
+ */
+export function normalizeBaseUrl(value: string): string {
   const normalized = normalizeHttpBaseUrl(value);
   if (normalized === undefined) {
     throw new UsageError(
@@ -154,7 +158,7 @@ function validateSeed(value: number | undefined): number | undefined {
  * Creates the output directory before the paid request: an unwritable or
  * impossible `--out-dir` must cost nothing, and the failure must name the path.
  */
-function ensureOutDir(dir: string): void {
+export function ensureOutDir(dir: string): void {
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch (error) {
@@ -166,7 +170,7 @@ function ensureOutDir(dir: string): void {
   }
 }
 
-function missingKeyError(provider: ProviderConfig): ConfigError {
+export function missingKeyError(provider: ProviderConfig): ConfigError {
   // The hint must be a command that runs: login takes the provider as a flag.
   const hints = [`run "mediagen login --provider ${shellArg(provider.name)}"`];
   if (provider.api_key_env) hints.push(`set ${provider.api_key_env}`);

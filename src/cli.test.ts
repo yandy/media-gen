@@ -1639,8 +1639,8 @@ models = ["doubao-seedance-1-0-pro"]
 
   it("does not confuse an unfinished base_url with a missing adapter", async () => {
     // A hand-written `<workspace-id>` host cannot produce an endpoint — but the
-    // openai dialect *does* have an image adapter, and "(no adapter yet)" there
-    // would send the user hunting for a code change.
+    // openai dialect *does* serve images, and a missing-adapter note there would
+    // send the user hunting for a code change.
     writeConfig(
       '[providers.aliyun]\nbase_url = "https://<workspace-id>.cn-beijing.maas.aliyuncs.com"\napi_key_env = "DASHSCOPE_API_KEY"\n\n[providers.aliyun.image]\napi_type = "openai"\ndefault = "qwen-image-3.0"\nmodels = ["qwen-image-3.0"]\n\n[providers.aliyun.video]\napi_type = "dashscope"\ndefault = "qwen-video"\nmodels = ["qwen-video"]\n',
     );
@@ -1649,7 +1649,10 @@ models = ["doubao-seedance-1-0-pro"]
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("endpoint: (base_url is not a URL yet)");
-    expect(result.stdout.match(/\(no adapter yet\)/g) ?? []).toHaveLength(1);
+    // The dashscope dialect has no video task, and the note says so rather than
+    // promising one later.
+    expect(result.stdout).toContain("(the dashscope dialect has no video task)");
+    expect(result.stdout).not.toContain("no adapter yet");
   });
 
   it("prints a task's path override and the URL it produces", async () => {
@@ -1705,7 +1708,7 @@ models = ["m"]
     expect(result.stdout).toContain("endpoint: (base_url carries a path; declare path = ... or use the origin)");
   });
 
-  it("warns that a video table cannot be used yet", async () => {
+  it("does not warn about a missing adapter for a task the dialect implements", async () => {
     const result = await run([
       "config", "add", "vid",
       "--api-type", "ark",
@@ -1715,20 +1718,39 @@ models = ["m"]
     ]);
 
     expect(result.code).toBe(0);
-    expect(result.stderr).toContain('the "ark" dialect has no "video" adapter yet');
+    expect(result.stderr).not.toContain('no "video" adapter');
   });
 
-  it("shows each provider's tasks and marks the one with no adapter", async () => {
+  it("says a dialect has no such task, without promising one later", async () => {
+    // adapterPath() misses for dashscope video, so the note branch is still live
+    // even now that the other two dialects have video adapters.
+    const result = await run([
+      "config", "add", "ds-vid",
+      "--api-type", "dashscope",
+      "--base-url", "https://dashscope.aliyuncs.com",
+      "--task", "video",
+      "--model", "wan2.5-t2v-preview",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toContain(
+      'note: the "dashscope" dialect has no "video" task; the table is stored, and ' +
+        '"config show" will say the same',
+    );
+  });
+
+  it("shows the endpoint of a task that has an adapter", async () => {
     writeConfig(VIDEO_ONLY);
 
     const result = await run(["config", "show"]);
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("video:");
-    expect(result.stdout).toContain("(no adapter yet)");
+    expect(result.stdout).toContain(
+      "endpoint: https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+    );
+    expect(result.stdout).not.toContain("(no adapter yet)");
     expect(result.stdout).toMatch(/timeout_seconds: 1800 \(default\)/);
-    // The adapter owns the path, so a task without one prints no URL at all.
-    expect(result.stdout).not.toContain("/contents/generations");
   });
 
   it("logs in to a provider that only declares a video task", async () => {
@@ -1754,5 +1776,311 @@ models = ["m"]
     expect(result.stderr).toContain('it points at the sub-path "/api/v3"');
     expect(result.stderr).toContain("set base_url to the origin");
     expect(readConfig()).toBe(before);
+  });
+});
+
+const VIDEO_CONFIG = `default_provider = "volcengine"
+
+[providers.volcengine]
+base_url = "https://ark.cn-beijing.volces.com"
+api_key_env = "ARK_API_KEY"
+
+[providers.volcengine.video]
+api_type = "ark"
+default = "doubao-seedance-1-0-pro-250528"
+models = ["doubao-seedance-1-0-pro-250528"]
+`;
+
+const VIDEO_CREATE_URL = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks";
+const VIDEO_KEY = "sk-video-0123456789";
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function mp4Response(): Response {
+  return new Response(Buffer.from("\x00\x00\x00\x18ftypmp42"), {
+    status: 200,
+    headers: { "content-type": "video/mp4" },
+  });
+}
+
+/**
+ * Serves a scripted list of responses in order. An exhausted script answers 400
+ * instead of repeating the last response: video polling sleeps between attempts, so
+ * a script left on "running" would stall this suite for the whole 1800s budget.
+ */
+function stubVideoFetch(responses: Response[]): { calls: { url: string; method: string }[] } {
+  const calls: { url: string; method: string }[] = [];
+  const queue = [...responses];
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method ?? "GET" });
+      const next = queue.shift();
+      if (next === undefined) {
+        return new Response(
+          JSON.stringify({ error: { code: "TestScriptExhausted", message: "no scripted response left" } }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        );
+      }
+      return next;
+    }),
+  );
+
+  return { calls };
+}
+
+describe("video generate", () => {
+  beforeEach(() => {
+    writeConfig(VIDEO_CONFIG);
+  });
+
+  it("creates the task, downloads the video and prints its path on stdout", async () => {
+    const stub = stubVideoFetch([
+      jsonResponse({ id: "cgt-1" }),
+      jsonResponse({ status: "succeeded", content: { video_url: "https://cdn.example.com/v.mp4" } }),
+      mp4Response(),
+    ]);
+
+    const result = await run([
+      "video", "generate", "a fox in snow",
+      "--provider", "volcengine", "--api-key", VIDEO_KEY, "--out-dir", outDir,
+    ]);
+
+    expect(result.code).toBe(0);
+    // Exact: a note leaking onto stdout, or a second line of any kind, must fail here.
+    expect(result.stdout.trim()).toMatch(/^\/.*volcengine-doubao-seedance-1-0-pro-250528-.*-0\.mp4$/);
+    expect(result.stdout).not.toContain("note:");
+    expect(result.stderr).toContain("cgt-1");
+    expect(stub.calls[0]).toEqual({ url: VIDEO_CREATE_URL, method: "POST" });
+  });
+
+  it("reports a task it did not wait for as ok, with the id and no files", async () => {
+    stubVideoFetch([jsonResponse({ id: "cgt-1" })]);
+
+    const result = await run([
+      "video", "generate", "a fox in snow", "--provider", "volcengine",
+      "--api-key", VIDEO_KEY, "--no-wait", "--json",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: true, task_id: "cgt-1", status: "pending", files: [], errors: [],
+    });
+    expect(result.stderr).toContain("mediagen video status cgt-1");
+  });
+
+  it("prints the task id on stdout when it did not wait", async () => {
+    stubVideoFetch([jsonResponse({ id: "cgt-1" })]);
+
+    const result = await run([
+      "video", "generate", "a fox in snow", "--provider", "volcengine",
+      "--api-key", VIDEO_KEY, "--no-wait",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe("cgt-1");
+  });
+
+  it("rejects --n and --size before any request", async () => {
+    const result = await run(["video", "generate", "p", "--n", "2"]);
+    expect(result.code).toBe(2);
+
+    const sized = await run(["video", "generate", "p", "--size", "2K"]);
+    expect(sized.code).toBe(2);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it("rejects a second --image instead of silently dropping it", async () => {
+    const result = await run([
+      "video", "generate", "p", "--provider", "volcengine", "--api-key", VIDEO_KEY,
+      "--image", writeImage("a.png"), "--image", writeImage("b.png"),
+    ]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toMatch(/one --image/);
+    expect(result.stderr).toMatch(/last_frame|首尾帧/i);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it("fails on an unwritable --out-dir before creating the paid task", async () => {
+    // A regular file in the parent position makes mkdir fail at once (ENOTDIR).
+    // /proc or a chmod-based path would block or misbehave under the sandbox.
+    const blocker = path.join(tempDir, "not-a-dir");
+    fs.writeFileSync(blocker, "x");
+    const target = path.join(blocker, "out");
+
+    const result = await run([
+      "video", "generate", "p", "--provider", "volcengine",
+      "--api-key", VIDEO_KEY, "--out-dir", target,
+    ]);
+
+    // Same class as the image path's: a UsageError, so exit 2, and nothing was spent.
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain(target);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty prompt before any request", async () => {
+    const result = await run(["video", "generate", "   ", "--provider", "volcengine", "--api-key", VIDEO_KEY]);
+
+    expect(result.code).toBe(2);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it("names both video dialects and the async contract in its help", async () => {
+    const help = (await run(["video", "generate", "--help"])).stdout;
+
+    expect(help).toContain("doubao-seedance-1-0-pro-250528");
+    expect(help).toContain("--no-wait");
+    // Both dialects are registered now, so both may be named.
+    expect(help).toContain("MiniMax-H3");
+    // --seed is ark-only, so the variant advice must say so.
+    expect(help).toContain("Ark-only flags");
+    expect(help).toContain("--seed");
+    expect(help).toContain("video status");
+
+    // The root help is where someone decides whether to run this at all, so the
+    // fact that creating a task is what costs money belongs there too.
+    const root = (await run(["--help"])).stdout;
+    expect(root).toContain("video generate");
+    expect(root).toContain("pay for a video task");
+    expect(root).toContain("mediagen video generate --help");
+  });
+});
+
+describe("video status", () => {
+  beforeEach(() => {
+    writeConfig(VIDEO_CONFIG);
+  });
+
+  it("asks once and reports a running task as a success with no files", async () => {
+    const stub = stubVideoFetch([jsonResponse({ status: "running" })]);
+
+    const result = await run([
+      "video", "status", "cgt-1", "--provider", "volcengine",
+      "--api-key", VIDEO_KEY, "--json",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: true, task_id: "cgt-1", status: "running", files: [], errors: [],
+    });
+    expect(stub.calls).toHaveLength(1);
+    expect(stub.calls[0].method).toBe("GET");
+    expect(stub.calls[0].url).toBe(`${VIDEO_CREATE_URL}/cgt-1`);
+  });
+
+  it("downloads the clip when the task has finished", async () => {
+    stubVideoFetch([
+      jsonResponse({ status: "succeeded", model: "doubao-seedance-1-0-pro-250528", content: { video_url: "https://cdn.example.com/v.mp4" } }),
+      mp4Response(),
+    ]);
+
+    const result = await run([
+      "video", "status", "cgt-1", "--provider", "volcengine",
+      "--api-key", VIDEO_KEY, "--out-dir", outDir,
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toMatch(/volcengine-doubao-seedance-1-0-pro-250528-.*-0\.mp4$/);
+  });
+
+  it("names the model the server reported, not the one the config defaults to", async () => {
+    stubVideoFetch([
+      jsonResponse({ status: "succeeded", model: "doubao-seedance-2-5-260628", content: { video_url: "https://cdn.example.com/v.mp4" } }),
+      mp4Response(),
+    ]);
+
+    const result = await run([
+      "video", "status", "cgt-1", "--provider", "volcengine",
+      "--api-key", VIDEO_KEY, "--out-dir", outDir,
+    ]);
+
+    expect(result.stdout).toContain("doubao-seedance-2-5-260628");
+  });
+
+  it("exits 1 and keeps the vendor's message when the task failed", async () => {
+    stubVideoFetch([
+      jsonResponse({ status: "failed", error: { code: "OutputVideoSensitiveContentDetected", message: "blocked by policy" } }),
+    ]);
+
+    const result = await run([
+      "video", "status", "cgt-1", "--provider", "volcengine", "--api-key", VIDEO_KEY,
+    ]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("blocked by policy");
+    expect(result.stderr).toContain("cgt-1");
+  });
+
+  it("rejects an empty task id without a request", async () => {
+    const result = await run(["video", "status", "", "--provider", "volcengine", "--api-key", VIDEO_KEY]);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("task id is required");
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it("says it asks once and spends nothing", async () => {
+    const help = (await run(["video", "status", "--help"])).stdout;
+
+    expect(help).toContain("asks once");
+    expect(help).toContain("nothing is billed");
+    // Both claims were wrong once; pin the corrected wording.
+    expect(help).toContain("the only one that cannot spend money");
+    expect(help).toContain("is not sent");
+  });
+});
+
+describe("the minimax dialect in config and on the video command", () => {
+  it("stores a minimax video table and shows its endpoint", async () => {
+    const added = await run([
+      "config", "add", "mm",
+      "--api-type", "minimax",
+      "--base-url", "https://api.minimax.io",
+      "--task", "video",
+      "--model", "MiniMax-H3",
+    ]);
+
+    expect(added.code).toBe(0);
+    expect(loadConfig().providers.mm.tasks.video).toEqual({
+      api_type: "minimax",
+      default: "MiniMax-H3",
+      models: ["MiniMax-H3"],
+    });
+
+    const shown = await run(["config", "show"]);
+    expect(shown.stdout).toContain("endpoint: https://api.minimax.io/v2/video_generation");
+
+    // `config add --help` is where a user learns minimax is a legal value.
+    const help = (await run(["config", "add", "--help"])).stdout;
+    expect(help).toContain("minimax");
+  });
+
+  it("points at --provider when a minimax provider is asked for another host's task", async () => {
+    writeConfig(`default_provider = "mm"
+
+[providers.mm]
+base_url = "https://api.minimax.io"
+api_key_env = "MINIMAX_API_KEY"
+
+[providers.mm.video]
+api_type = "minimax"
+default = "MiniMax-H3"
+models = ["MiniMax-H3"]
+`);
+    stubVideoFetch([new Response("", { status: 404 })]);
+
+    const result = await run(["video", "status", "cgt-ark-task", "--provider", "mm", "--api-key", "sk-mm-1"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("--provider");
+    expect(result.stderr).toContain("cgt-ark-task");
   });
 });

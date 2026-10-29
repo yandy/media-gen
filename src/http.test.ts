@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, UsageError } from "./errors.js";
-import { callApi, parseJsonOrThrow } from "./http.js";
+import {
+  REQUEST_TIMEOUT_MS as SINGLE_REQUEST_TIMEOUT_MS,
+  callApi,
+  createTask,
+  parseJsonOrThrow,
+  pollTask,
+} from "./http.js";
 import type { ImageRequest, ParsedResponse, ProviderConfig, Task, TaskBinding } from "./types.js";
 
 const API_KEY = "sk-test-secret-key-0123456789";
@@ -88,6 +94,89 @@ function jsonResponse(body: unknown, status = 200, requestId?: string): Response
   return new Response(JSON.stringify(body), { status, headers });
 }
 
+const ARK_BASE_URL = "https://ark.cn-beijing.volces.com";
+const VIDEO_REQUEST = { model: "m", prompt: "p" };
+
+/**
+ * A video binding for transport tests. `timeout_ms` is the whole poll budget,
+ * deliberately unrelated to the timeout one create or poll request may take.
+ */
+function arkBinding(overrides: Partial<TaskBinding> = {}, baseUrl = ARK_BASE_URL): TaskBinding {
+  return {
+    provider: { name: "ark", api_type: "ark", base_url: baseUrl },
+    task: "video",
+    model: "m",
+    timeout_ms: 1_800_000,
+    dialect: "ark",
+    ...overrides,
+  };
+}
+
+function minimaxBinding(): TaskBinding {
+  return {
+    provider: { name: "minimax", api_type: "minimax", base_url: "https://api.minimax.io" },
+    task: "video",
+    model: "MiniMax-H3",
+    timeout_ms: 1_800_000,
+    dialect: "minimax",
+  };
+}
+
+interface VideoCall {
+  url: string;
+  method: string | undefined;
+  headers: Record<string, string>;
+  body: unknown;
+}
+
+/**
+ * Records every video round trip and replays one response per call. Unlike the
+ * image stub there is no download branch, so `GET` is recorded too.
+ */
+function stubVideoFetch(
+  ...responses: Array<Response | (() => Promise<Response>)>
+): { calls: VideoCall[] } {
+  const calls: VideoCall[] = [];
+  let next = 0;
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      const headers: Record<string, string> = {};
+      for (const [name, value] of Object.entries(
+        (init?.headers ?? {}) as Record<string, string>,
+      )) {
+        headers[name.toLowerCase()] = value;
+      }
+      calls.push({
+        url,
+        method: init?.method,
+        headers,
+        body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      });
+
+      const entry = responses[next];
+      next += 1;
+      // One response per call, so an extra request fails loudly instead of
+      // replaying a body the test never meant to send twice.
+      if (entry === undefined) throw new Error("stubVideoFetch has no response to replay");
+      return typeof entry === "function" ? entry() : entry.clone();
+    }),
+  );
+
+  return { calls };
+}
+
+/** What a hung request looks like to http.ts: `isTimeoutError` reads these names. */
+function timeoutRejection(): () => Promise<Response> {
+  return () =>
+    Promise.reject(
+      Object.assign(new Error("The operation was aborted due to timeout"), {
+        name: "TimeoutError",
+      }),
+    );
+}
+
 describe("callApi: the binding decides task and timeout", () => {
   it("uses the binding's timeout for the abort signal", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
@@ -116,8 +205,31 @@ describe("callApi: the binding decides task and timeout", () => {
         apiKey: API_KEY,
         request: imageRequest(),
       }),
-    ).rejects.toThrow('the "openai" dialect has no "video" adapter yet');
+    ).rejects.toThrow('the "openai" dialect has no "video" adapter; implemented tasks: image');
 
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a video binding even on a dialect that has a video adapter, before any fetch", async () => {
+    const fetchMock = stubFetch(() => jsonResponse({ data: [] }));
+
+    const error = await rejection(
+      callApi({
+        binding: bindingFor(
+          { name: "ark", api_type: "ark", base_url: "https://ark.cn-beijing.volces.com" },
+          "video",
+        ),
+        apiKey: API_KEY,
+        request: imageRequest(),
+      }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    // The image transport's own guard, not getAdapter's missing-adapter message:
+    // both mention "video", so only the full sentence proves which one fired.
+    expect(error.message).toBe(
+      'this request is for the image task; the binding is for the "video" task',
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
@@ -670,5 +782,330 @@ describe("parseJsonOrThrow", () => {
 
     expect(error).toBeInstanceOf(ApiError);
     expect(error.message).toMatch(/empty/i);
+  });
+});
+
+describe("createTask: the async video task is created exactly once", () => {
+  it("posts the built body to the create path with bearer auth", async () => {
+    const stub = stubVideoFetch(jsonResponse({ id: "cgt-1" }));
+
+    const out = await createTask({ binding: arkBinding(), apiKey: "sk-x", request: VIDEO_REQUEST });
+
+    expect(out.taskId).toBe("cgt-1");
+    expect(stub.calls).toHaveLength(1);
+    expect(stub.calls[0]?.url).toBe(`${ARK_BASE_URL}/api/v3/contents/generations/tasks`);
+    expect(stub.calls[0]?.method).toBe("POST");
+    // Only the bearer header is required: neither dialect declares extra headers.
+    expect(stub.calls[0]?.headers).toEqual({
+      authorization: "Bearer sk-x",
+      "content-type": "application/json",
+    });
+    expect(stub.calls[0]?.body).toEqual({
+      model: "m",
+      content: [{ type: "text", text: "p" }],
+    });
+  });
+
+  it("caps one create request at the request timeout, not at the poll budget", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    stubVideoFetch(jsonResponse({ id: "cgt-1" }));
+
+    await createTask({ binding: arkBinding(), apiKey: "sk-x", request: VIDEO_REQUEST });
+
+    // The value, not the type: a hung request must not be able to eat the budget.
+    expect(timeoutSpy).toHaveBeenCalledWith(SINGLE_REQUEST_TIMEOUT_MS);
+    expect(SINGLE_REQUEST_TIMEOUT_MS).toBe(60_000);
+  });
+
+  it("lets a task's path override cover both create and poll", async () => {
+    const stub = stubVideoFetch(
+      jsonResponse({ id: "cgt-1" }),
+      jsonResponse({ status: "running" }),
+    );
+    const binding = arkBinding({ path: "/v1/videos" }, "https://ark.example.com");
+
+    await createTask({ binding, apiKey: "sk-x", request: VIDEO_REQUEST });
+    await pollTask({ binding, apiKey: "sk-x", taskId: "cgt-1" });
+
+    expect(stub.calls[0]?.url).toBe("https://ark.example.com/v1/videos");
+    expect(stub.calls[1]?.url).toBe("https://ark.example.com/v1/videos/cgt-1");
+  });
+
+  it("reports a non-2xx create with the vendor error and never leaks the key", async () => {
+    const stub = stubVideoFetch(
+      jsonResponse({ error: { code: "InvalidParameter", message: "bad duration" } }, 400),
+    );
+
+    const error = await rejection(
+      createTask({ binding: arkBinding(), apiKey: API_KEY, request: VIDEO_REQUEST }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toContain("InvalidParameter");
+    expect(error.message).toContain("bad duration");
+    expect(error.message).not.toContain(API_KEY);
+    // A paid request is never retried.
+    expect(stub.calls).toHaveLength(1);
+  });
+
+  it("warns that a timed-out create may already have been paid for", async () => {
+    stubVideoFetch(timeoutRejection());
+
+    const error = await rejection(
+      createTask({ binding: arkBinding(), apiKey: "sk-x", request: VIDEO_REQUEST }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toMatch(/may already have been created and paid/i);
+    // No id exists at this point, so the remedy cannot be a command that needs one.
+    expect(error.message).toMatch(/no task id came back/i);
+    expect(error.message).toMatch(/console|usage/i);
+    expect(error.message).not.toContain("video status");
+  });
+
+  // A timeout is only one way to lose the id of a task that was accepted. Each of
+  // these left the process, so each must carry the same warning: read as "nothing
+  // happened", the caller submits again and pays for a second task.
+  const unresolvedCreates: [string, () => Promise<Response>][] = [
+    ["a network failure after the request was sent", () => Promise.reject(new TypeError("fetch failed"))],
+    ["a 200 with an empty body", async () => new Response("", { status: 200 })],
+    ["a 200 that is not JSON", async () => new Response("<html>proxy</html>", { status: 200 })],
+    ["a 200 whose body carries no id", async () => jsonResponse({ ok: true })],
+    ["a 5xx from the gateway", async () => new Response("", { status: 504 })],
+  ];
+
+  it.each(unresolvedCreates)("warns when a create ends unresolved: %s", async (_name, respond) => {
+    stubVideoFetch(respond);
+
+    const error = await rejection(
+      createTask({ binding: arkBinding(), apiKey: "sk-x", request: VIDEO_REQUEST }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toMatch(/may already have been created and paid/i);
+    expect(error.message).toMatch(/console|usage/i);
+  });
+
+  it("does not warn on a create the vendor rejected outright", async () => {
+    // A 400/401/429 means nothing was created, so a warning would only add noise
+    // to a message that already tells the user what to fix.
+    stubVideoFetch(jsonResponse({ error: { code: "InvalidParameter", message: "bad" } }, 400));
+
+    const error = await rejection(
+      createTask({ binding: arkBinding(), apiKey: "sk-x", request: VIDEO_REQUEST }),
+    );
+
+    expect(error.message).not.toMatch(/may already have been created/i);
+  });
+
+  it("cleans the task id before it leaves the transport", async () => {
+    // The id reaches stdout, stderr and a URL; a hostile one must not carry control
+    // bytes or megabytes into any of them.
+    stubVideoFetch(jsonResponse({ id: `cgt-1${"\u001b[2J".repeat(3)}${"x".repeat(5_000)}` }));
+
+    const { taskId } = await createTask({
+      binding: arkBinding(),
+      apiKey: "sk-x",
+      request: VIDEO_REQUEST,
+    });
+
+    expect(taskId).not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(taskId.length).toBeLessThan(300);
+    expect(taskId.startsWith("cgt-1")).toBe(true);
+  });
+
+  it("keeps that warning when only the response body times out", async () => {
+    // The create was accepted; losing the id is what makes a rerun pay twice.
+    const truncated = {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      text: () =>
+        Promise.reject(
+          Object.assign(new Error("The operation was aborted due to timeout"), {
+            name: "TimeoutError",
+          }),
+        ),
+    } as unknown as Response;
+    stubVideoFetch(() => Promise.resolve(truncated));
+
+    const error = await rejection(
+      createTask({ binding: arkBinding(), apiKey: "sk-x", request: VIDEO_REQUEST }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toMatch(/may already have been created and paid/i);
+  });
+});
+
+describe("pollTask: one poll, read by the adapter", () => {
+  it("asks minimax for the task under its own prefix", async () => {
+    const stub = stubVideoFetch(jsonResponse({ task: { status: "running" } }));
+
+    await pollTask({ binding: minimaxBinding(), apiKey: "sk-x", taskId: "abc" });
+
+    // ark's poll path is its create path plus "/{id}", so only this dialect can prove
+    // that the transport consults pollPath() instead of appending a suffix.
+    expect(stub.calls[0].url).toBe("https://api.minimax.io/v2/query/video_generation/abc");
+  });
+
+  it("polls the adapter's own poll path with a GET", async () => {
+    const stub = stubVideoFetch(jsonResponse({ status: "running" }));
+
+    const outcome = await pollTask({ binding: arkBinding(), apiKey: "sk-x", taskId: "abc" });
+
+    expect(outcome).toEqual({ state: "running" });
+    expect(stub.calls).toHaveLength(1);
+    expect(stub.calls[0]?.url).toBe(
+      `${ARK_BASE_URL}/api/v3/contents/generations/tasks/abc`,
+    );
+    expect(stub.calls[0]?.method).toBe("GET");
+    expect(stub.calls[0]?.headers).toEqual({ authorization: "Bearer sk-x" });
+    expect(stub.calls[0]?.body).toBeUndefined();
+  });
+
+  it("returns the adapter's outcome, so a finished task carries its result", async () => {
+    stubVideoFetch(
+      jsonResponse({
+        status: "succeeded",
+        content: { video_url: "https://cdn.example.com/clip.mp4" },
+        model: "m",
+      }),
+    );
+
+    const outcome = await pollTask({ binding: arkBinding(), apiKey: "sk-x", taskId: "abc" });
+
+    expect(outcome).toEqual({
+      state: "succeeded",
+      result: { url: "https://cdn.example.com/clip.mp4", model: "m" },
+    });
+  });
+
+  it("surfaces the x-request-id header on both verbs", async () => {
+    stubVideoFetch(
+      jsonResponse({ id: "cgt-1" }, 200, REQUEST_ID),
+      jsonResponse({ status: "running" }, 200, REQUEST_ID),
+    );
+
+    const created = await createTask({
+      binding: arkBinding(),
+      apiKey: "sk-x",
+      request: VIDEO_REQUEST,
+    });
+    const polled = await pollTask({ binding: arkBinding(), apiKey: "sk-x", taskId: "cgt-1" });
+
+    expect(created.requestId).toBe(REQUEST_ID);
+    expect(polled).toEqual({ state: "running", requestId: REQUEST_ID });
+  });
+
+  it("points at --provider when the poll answers 404", async () => {
+    stubVideoFetch(new Response("", { status: 404 }));
+
+    const error = await rejection(
+      pollTask({ binding: arkBinding(), apiKey: "sk-x", taskId: "gone" }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toContain("gone");
+    expect(error.message).toContain("ark.cn-beijing.volces.com");
+    expect(error.message).toMatch(/--provider/);
+    // A 404 is an unknown id on this host, not a task that failed.
+    expect(error.message).toMatch(/not a failed task/i);
+  });
+
+  it("quotes the vendor when the poll 404 carries a body", async () => {
+    stubVideoFetch(
+      jsonResponse({ error: { code: "NotFound", message: `no such route: ${API_KEY}` } }, 404),
+    );
+
+    const error = await rejection(
+      pollTask({ binding: arkBinding(), apiKey: API_KEY, taskId: "gone" }),
+    );
+
+    // A right host with a wrong path answers 404 too, and the two lines above
+    // point at --provider, so the vendor's own line has to be there.
+    expect(error.message).toContain("no such route");
+    expect(error.message).toContain("gone");
+    expect(error.message).toMatch(/--provider/);
+    expect(error.message).not.toContain(API_KEY);
+  });
+
+  it("does not let a hostile task id drive the terminal in that 404 message", async () => {
+    stubVideoFetch(new Response("", { status: 404 }));
+
+    const error = await rejection(
+      pollTask({ binding: arkBinding(), apiKey: "sk-x", taskId: "\u001b[2Jgone\u0007" }),
+    );
+
+    expect(error.message).toContain("gone");
+    // The message is deliberately two lines; every other control byte is gone.
+    expect(error.message).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
+    expect(error.message).not.toContain("[2J");
+  });
+
+  it("bounds a very long task id so it cannot flood the terminal", async () => {
+    stubVideoFetch(new Response("", { status: 404 }));
+
+    const error = await rejection(
+      pollTask({ binding: arkBinding(), apiKey: "sk-x", taskId: "x".repeat(20_000) }),
+    );
+
+    // The same 200-character cap a response body gets, plus the ellipsis.
+    expect(error.message).toContain(`${"x".repeat(200)}...`);
+    expect(error.message).not.toContain("x".repeat(201));
+    expect(error.message.length).toBeLessThan(500);
+  });
+
+  it("redacts the API key out of a terminal task's vendor error text", async () => {
+    // A 2xx poll never reaches errorForStatus, so this is the only path where the
+    // vendor's failure line could carry a reflected key into an ApiError whose code
+    // is published into the JSON envelope on disk.
+    stubVideoFetch(
+      jsonResponse({
+        status: "failed",
+        error: { code: `InvalidApiKey.${API_KEY}`, message: `bad key ${API_KEY}` },
+      }),
+    );
+
+    const outcome = await pollTask({ binding: arkBinding(), apiKey: API_KEY, taskId: "cgt-1" });
+
+    expect(outcome.state).toBe("failed");
+    if (outcome.state !== "failed") throw new Error(`expected a failed outcome, got ${outcome.state}`);
+    expect(outcome.failure.message).not.toContain(API_KEY);
+    expect(outcome.failure.message).toContain("[redacted]");
+    expect(outcome.failure.code ?? "").not.toContain(API_KEY);
+    expect(outcome.failure.code ?? "").toContain("[redacted]");
+    expect(JSON.stringify(outcome)).not.toContain(API_KEY);
+  });
+
+  it("redacts the API key out of an error the adapter throws for a poll", async () => {
+    // `pollOutcome` throws for a status nobody anticipated, and that message is the
+    // raw vendor string the pipeline publishes to stderr and into the envelope. It
+    // is the same leak as the terminal-outcome case above, one field over.
+    stubVideoFetch(jsonResponse({ status: `paused-${API_KEY}` }));
+
+    const error = await rejection(
+      pollTask({ binding: arkBinding(), apiKey: API_KEY, taskId: "cgt-1" }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toMatch(/unknown status/);
+    expect(error.message).not.toContain(API_KEY);
+    expect(error.message).toContain("[redacted]");
+    // The adapter raised it, so it stays terminal for the retry policy.
+    expect((error as ApiError).status).toBeUndefined();
+  });
+
+  it("uses the plain timeout wording for a poll, which is not paid for", async () => {
+    stubVideoFetch(timeoutRejection());
+
+    const error = await rejection(
+      pollTask({ binding: arkBinding(), apiKey: "sk-x", taskId: "abc" }),
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toMatch(/timeout/i);
+    expect(error.message).toContain("60s");
+    expect(error.message).not.toMatch(/paid/i);
   });
 });

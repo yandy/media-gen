@@ -203,15 +203,18 @@ export function vendorPathIssue(value: string): OriginIssue | undefined {
 
 /**
  * What a `path` override should say when base_url already carries a prefix: the
- * adapter's path minus the vendor's own `<api>/<version>` root (two segments in
- * every dialect, `/api/v3`, `/compatible-mode/v1`). Only ever used to suggest a
- * value in an error message; the request itself still uses `createPath`.
+ * adapter's path minus the vendor's own API root — two segments for the Alibaba and
+ * Volcengine dialects (`/api/v3`, `/compatible-mode/v1`) and one for minimax (`/v2`).
+ * Only ever used to suggest a value in an error message; the request itself still uses
+ * `createPath`.
  */
 function pathAfterVendorRoot(createPath: string | undefined): string | undefined {
   if (createPath === undefined) return undefined;
   const segments = createPath.split("/");
-  if (segments.length < 5) return undefined;
-  return `/${segments.slice(3).join("/")}`;
+  // ["", "api", "v3", ...] → two-segment root; ["", "v2", ...] → one-segment root.
+  const rootSegments = segments.length >= 5 ? 3 : segments.length >= 3 ? 2 : 0;
+  if (rootSegments === 0) return undefined;
+  return `/${segments.slice(rootSegments).join("/")}`;
 }
 
 function isVendorHost(hostname: string): boolean {
@@ -220,6 +223,7 @@ function isVendorHost(hostname: string): boolean {
     host === "ark.cn-beijing.volces.com" ||
     host === "dashscope.aliyuncs.com" ||
     host === "dashscope-intl.aliyuncs.com" ||
+    host === "api.minimax.io" ||
     host.endsWith(".maas.aliyuncs.com")
   );
 }
@@ -228,7 +232,7 @@ function isVendorHost(hostname: string): boolean {
 function readDialect(
   value: unknown,
 ): { dialect: Dialect; deprecated: boolean } | undefined {
-  if (value === "openai" || value === "dashscope" || value === "ark") {
+  if (value === "openai" || value === "dashscope" || value === "ark" || value === "minimax") {
     return { dialect: value, deprecated: false };
   }
   if (value === "qwen") return { dialect: "openai", deprecated: true };
@@ -237,7 +241,7 @@ function readDialect(
 
 /** The one sentence every invalid-api_type error ends with. */
 const DIALECT_CHOICES =
-  'expected "openai", "dashscope" or "ark" ("qwen" is accepted as a deprecated alias of "openai")';
+  'expected "openai", "dashscope", "ark" or "minimax" ("qwen" is accepted as a deprecated alias of "openai")';
 
 function isTable(value: unknown): value is TomlTable {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -465,7 +469,10 @@ function readTaskBlock(
           `path under ${where} must start with "/" and carry no query or fragment (${file})`,
         );
       }
-      block.path = value;
+      // A trailing slash would double once the id is appended
+      // (`/v1/videos//{id}`), so it is stripped here, where the value is
+      // validated; a bare "/" stays "/".
+      block.path = value.replace(/\/+$/, "") || "/";
       continue;
     }
 
@@ -498,7 +505,7 @@ export function validateProviderShape(name: string, config: TaskConfig): Provide
     throw new ConfigError(
       `unknown provider "${name}": no [providers.${tomlKey(name)}] table in ${file}; ` +
         `add one by hand, or run "mediagen config add ${shellArg(name)} ` +
-        `--api-type <openai|dashscope|ark> --base-url <origin> --model <id>"`,
+        `--api-type <openai|dashscope|ark|minimax> --base-url <origin> --model <id>"`,
     );
   }
 

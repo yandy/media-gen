@@ -10,7 +10,7 @@ import {
   validateSize,
   type GenerateOptions,
 } from "./generate.js";
-import type { Dialect } from "./types.js";
+import type { Dialect, ImageResult } from "./types.js";
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
 const QWEN_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/images/generations";
@@ -979,7 +979,8 @@ models = ["some-model"]
     );
 
     expect(result.saved.map((file) => file.index)).toEqual([0, 1]);
-    expect(result.saved.map((file) => file.meta?.zIndex)).toEqual([0, 1]);
+    // The saved-media union now also covers video results; zIndex is image-only.
+    expect(result.saved.map((file) => (file.meta as ImageResult | undefined)?.zIndex)).toEqual([0, 1]);
     expect(result.response.failures).toEqual([
       { code: "LayerFailed", message: "layer 2 could not be rendered" },
     ]);

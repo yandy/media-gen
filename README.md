@@ -3,7 +3,8 @@
 English | [简体中文](README.zh-CN.md)
 
 Generate and edit images through Alibaba Bailian (Qwen-Image) and Volcengine Ark
-(**doubao / seedream**), save them to disk, print their paths. Explicit flags, no
+(**doubao / seedream**), and generate video through Ark (**doubao / seedance**) or
+MiniMax (**H3**). Save results to disk, print their paths. Explicit flags, no
 interactive prompts, `--json` for programs.
 
 ```bash
@@ -33,12 +34,15 @@ Node >= 18, two runtime dependencies, a DashScope and/or Ark API key.
 |---|---|
 | `mediagen image generate <prompt>` | text to image; add `--image` to edit |
 | `mediagen image edit <prompt>` | the same, with `--image` required |
+| `mediagen video generate <prompt>` | text to video, or from one first frame; creates a paid task |
+| `mediagen video status <task-id>` | look at one task once, and save its video if it finished |
 | `mediagen login` / `logout` / `auth status` | store, remove, inspect API keys |
 | `mediagen config show` / `config path` | resolved config, and where it lives |
 | `mediagen config add <name>` | create a provider in config.toml; everything else is a manual edit |
 
-`mediagen image generate --help` is the reference: every flag, the model table, the
-size reference, examples. Everything below is the short version.
+`mediagen image generate --help` and `mediagen video generate --help` are the
+reference: every flag, the model table, the size reference, examples. Everything below
+is the short version.
 
 ## Models and flags
 
@@ -48,10 +52,15 @@ size reference, examples. Everything below is the short version.
 | `doubao-seedream-5-0-flash-260915` | `--provider volcengine` | speed: drafts, iteration |
 | `doubao-seedream-5-0-pro` | `--provider volcengine --model doubao-seedream-5-0-pro` | highest quality |
 
-`aliyun` and `volcengine` are the two provider names the first run writes into
+| video model | provider | pick it when |
+|---|---|---|
+| `doubao-seedance-1-0-pro-250528` | `--provider volcengine` | text to video, or animate one first frame |
+| `MiniMax-H3` | `--provider minimax` | the same, up to 2K, from MiniMax |
+
+`aliyun`, `volcengine` and `minimax` are the provider names the first run writes into
 `config.toml`; rename them freely. A model is usable only if it is listed in
-`models = [...]` under that provider's `image` table, and a second model of the same
-vendor is one more entry there — never another provider. Ids are dated snapshots, so
+`models = [...]` under that provider's table for the task (`image` or `video`), and a
+second model of the same vendor is one more entry there — never another provider. Ids are dated snapshots, so
 edit `models` (and `default`) in `config.toml` as they roll forward.
 
 ### Protocols
@@ -64,10 +73,18 @@ protocol for images and another for video:
 | `openai` | the OpenAI Images shape: flat `{model, prompt, size, n}`, `data[].url` back | Bailian's `compatible-mode`, most third-party proxies |
 | `dashscope` | Alibaba's native shape: `input.messages` + `parameters`, `output.choices[].message.content[].image` back | Bailian's native endpoint, or a gateway that exposes it (see below) |
 | `ark` | Volcengine's own API: OpenAI-shaped for images, with its own parameters and per-item errors | Volcengine Ark, for images and video |
+| `minimax` | MiniMax's video API: `content[]` items typed `text`/`image_url`, result nested under `task` | MiniMax H3, video only |
+
+`dashscope` serves images only; it has no video task. `video generate` speaks `ark`
+or `minimax`, and each declares its own resolution tiers (`ark`: 480p/720p/1080p/4k,
+`minimax`: 480p/768p/2k) — a tier the selected dialect does not have fails locally,
+while which tier a *model* supports is the vendor's call, checked when the task is
+created and before anything is billed.
 
 `qwen` still works as a deprecated alias of `openai`. A flag the selected protocol
 does not accept fails before any paid request is sent (`--output-format` is ark-only,
-`--prompt-extend-mode` is openai-only). `--size` takes a tier (`2K`), pixels
+`--prompt-extend-mode` is openai-only; on video, `--seed`/`--generate-audio`/
+`--output-format`/`--watermark` are ark-only). `--size` takes a tier (`2K`), pixels
 (`2048x2048`), or `auto` (openai only); `dashscope` takes pixels only, because it
 sends `宽*高` and has no tier or `auto` concept. `--n` takes 1-6 — on ark each image
 is a separate paid request.
@@ -87,6 +104,20 @@ files are already paid for, so do not re-run the request. Exit codes: `0` succes
 (including partial), `1` API/config/runtime failure, `2` usage error — always
 raised before a request is sent, so it costs nothing. Paid requests are never
 retried.
+
+A video run reports the task it created, because creating the task is what is billed:
+
+```json
+{"ok":true,"task_id":"cgt-20261028-abcd","status":"succeeded","files":[{"path":"/tmp/out/volcengine-doubao-seedance-1-0-pro-250528-20261028-101500-0.mp4","index":0,"url":"https://...","duration":5,"resolution":"720p"}],"errors":[],"usage":{"completion_tokens":108900}}
+```
+
+There is no `partial` on video: one request makes one clip. **`ok` means the command
+succeeded, not that a file exists** — `--no-wait`, and a `video status` that finds the
+task still `pending` or `running`, are `{"ok":true,...,"files":[]}` with exit `0`.
+Read `status` and `files`: an `ok: false` there would invite you to submit a task that
+was already paid for. Note that `--no-wait` reports `status: "pending"` without having
+asked — treat it as "unknown" until a `video status` call answers. When the poll budget runs out the error carries `task_id` and
+code `TaskNotFinished`, and `video status <id>` resumes it without paying again.
 
 ## Configuration
 
@@ -126,6 +157,15 @@ api_key_env = "DASHSCOPE_API_KEY"
 api_type = "openai"
 default  = "qwen-image-3.0"
 models   = ["qwen-image-3.0"]
+
+[providers.minimax]                 # a video-only account
+base_url    = "https://api.minimax.io"
+api_key_env = "MINIMAX_API_KEY"
+
+[providers.minimax.video]
+api_type = "minimax"
+default  = "MiniMax-H3"
+models   = ["MiniMax-H3", "MiniMax-H3-Max"]
 
 [providers.my-gateway]              # a gateway that serves the native protocol
 base_url    = "https://gateway.example.com"
@@ -176,8 +216,12 @@ Without `path`, a sub-path under a vendor's own domain is refused before any req
 (it would be doubled), with the origin or the `path` value to use. `path` is only for
 hosts that do not mirror the vendor's layout; the adapter's own path stays the default.
 
-`video` tables parse and are validated, but no dialect has a video adapter yet: a
-video task reports exactly that and `config show` prints no endpoint for it.
+Video is asynchronous: `video generate` creates a task (that is what gets billed),
+writes its id to stderr, then polls until the clip exists — two to five minutes is
+normal, and the poll budget is the task's `timeout_seconds` (default 1800). The clip
+URL is good for 24 hours, so `video status <id>` can fetch it later; `--no-wait` hands
+the id back immediately, which is what an agent wants when its own timeout is shorter
+than the vendor's render. One clip per request: `--n` belongs to images.
 
 A key belongs to a provider entry: `--api-key`, else that entry's `api_key_env`,
 else `auth.json`. There is no dialect-level default key variable, so two entries of
@@ -189,7 +233,10 @@ host, and the seed therefore ships the native protocol, whose endpoint is served
 publicly. A `base_url` that still contains `<...>` is rejected before spending anything. `mediagen config show` prints each provider's
 tasks, their models, and the endpoint each one would actually hit. Set
 `NODE_USE_ENV_PROXY=1` on Node >= 24 to honour `HTTP_PROXY`. Timeouts: per request
-`timeout_seconds` for the task (default 300 s, video 1800 s), 120 s per download.
+`timeout_seconds` for the task (default 300 s, video 1800 s), 120 s per image
+download and 600 s per video download. For video that budget is the *whole* poll
+window, not one request: each create or poll gets 60 s, so a hung request cannot eat
+the budget, and the download has its own 600 s and is not counted against it.
 
 Working from an agent? `skills/mediagen/SKILL.md` says when to reach for this CLI.
 

@@ -16,9 +16,10 @@ export const SEED_CONFIG = `# mediagen configuration. Edit and save; the CLI re-
 # task under it.
 #
 # The protocols are "openai" (the OpenAI-compatible wire format), "dashscope"
-# (Alibaba's native input.messages/parameters form) and "ark" (Volcengine's own
-# API, OpenAI-shaped for images but with its own parameters and per-item errors).
-# "qwen" still works as a deprecated alias of "openai".
+# (Alibaba's native input.messages/parameters form), "ark" (Volcengine's own API,
+# OpenAI-shaped for images but with its own parameters and per-item errors) and
+# "minimax" (MiniMax's video API). "qwen" still works as a deprecated alias of
+# "openai". dashscope serves images only: it has no video task.
 #
 # base_url is the origin. The version segment belongs to the endpoint, which the
 # dialect appends per task (/api/v3/images/generations, /compatible-mode/v1/...).
@@ -37,8 +38,8 @@ models   = ["doubao-seedream-5-0-flash-260915", "doubao-seedream-5-0-pro"]
 
 [providers.volcengine.video]
 api_type = "ark"
-default  = "doubao-seedance-1-0-pro"
-models   = ["doubao-seedance-1-0-pro"]
+default  = "doubao-seedance-1-0-pro-250528"
+models   = ["doubao-seedance-1-0-pro-250528"]   # ids are dated snapshots; add more here
 
 [providers.aliyun]
 # Bailian's native protocol is served on the public host, so this entry works as
@@ -52,6 +53,15 @@ api_key_env = "DASHSCOPE_API_KEY"
 api_type = "dashscope"          # input.messages + parameters, output.choices[].image
 default  = "qwen-image-3.0"
 models   = ["qwen-image-3.0"]
+
+[providers.minimax]
+base_url    = "https://api.minimax.io"
+api_key_env = "MINIMAX_API_KEY"
+
+[providers.minimax.video]
+api_type = "minimax"
+default  = "MiniMax-H3"
+models   = ["MiniMax-H3", "MiniMax-H3-Max"]   # -Max: 480P/768P only, 5s minimum
 
 # A gateway that serves DashScope's native protocol on its own path:
 # [providers.my-gateway]

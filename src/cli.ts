@@ -29,7 +29,21 @@ import {
 } from "./config.js";
 import { ConfigError, UsageError } from "./errors.js";
 import { runGenerate, type GenerateOptions } from "./generate.js";
-import { renderError, renderHuman, renderJson, type RenderedOutput } from "./output.js";
+import {
+  RATIOS,
+  runVideoGenerate,
+  runVideoStatus,
+  type VideoOptions,
+  type VideoStatusOptions,
+} from "./video.js";
+import {
+  renderError,
+  renderHuman,
+  renderJson,
+  renderVideoHuman,
+  renderVideoJson,
+  type RenderedOutput,
+} from "./output.js";
 import { shellArg, tomlBasicString, tomlKey } from "./toml.js";
 import type { Task } from "./types.js";
 import { adapterPath } from "./api/index.js";
@@ -137,6 +151,34 @@ interface ImageFlags {
   baseUrl?: string;
 }
 
+interface VideoFlags {
+  provider?: string;
+  model?: string;
+  image?: string[];
+  resolution?: string;
+  ratio?: string;
+  duration?: string;
+  seed?: string;
+  watermark?: string;
+  generateAudio?: string;
+  outputFormat?: string;
+  outDir?: string;
+  json?: boolean;
+  apiKey?: string;
+  baseUrl?: string;
+  /** `--no-wait` is a negated flag, so commander reports `wait === false`. */
+  wait?: boolean;
+}
+
+interface StatusFlags {
+  provider?: string;
+  model?: string;
+  outDir?: string;
+  json?: boolean;
+  apiKey?: string;
+  baseUrl?: string;
+}
+
 const ROOT_HELP = `
 Built for AI agents: explicit flags, no interactive prompts, machine-readable output.
 
@@ -147,6 +189,9 @@ Quickstart:
   mediagen image generate "a red fox in fresh snow" --provider my-proxy --out-dir ./out
   mediagen image edit "make the sky sunset orange" --image ./photo.jpg
   mediagen image generate "..." --json               # {"ok":..,"files":[..],"errors":[..]}
+  mediagen video generate "a fox running through deep snow" --provider volcengine
+  mediagen video generate "..." --no-wait --json     # returns the task id immediately
+  mediagen video status <task-id>                    # check a task you already paid for
 
 Subcommands:
   login / logout    store or remove a provider's API key in auth.json; provider
@@ -155,11 +200,15 @@ Subcommands:
   config show       the resolved configuration, with a source note for each value
   config path       where config.toml lives
   config add        create a provider in config.toml (edit the file for anything else)
+  video generate    create and pay for a video task, then save the result
+  video status      look at one task once, and save its video if it finished
 
-Exit codes: 0 success (including a partial success that saved at least one file),
-1 an API/config/runtime failure, 2 a usage error.
+Exit codes: 0 success — including a partial image success that saved at least one
+file, a video task that was created and is still running, or a video task that was
+merely read; 1 an API/config/runtime failure, 2 a usage error.
 
-Run "mediagen image generate --help" for the flag list, the model table and examples.`;
+Run "mediagen image generate --help" or "mediagen video generate --help" for the flag
+list, the model table and examples.`;
 
 /** Shared body of the `image generate` / `image edit` help; examples match the command. */
 function imageHelpText(command: "generate" | "edit"): string {
@@ -295,6 +344,116 @@ function collectImage(value: string, previous: string[] | undefined): string[] {
   return previous === undefined ? [value] : [...previous, value];
 }
 
+const VIDEO_OPTION_HELP = {
+  provider: "provider name declared in config.toml (default: config default_provider)",
+  model: "model id, must be listed in the task's models (default: the task's default)",
+  image: "first frame, one per request; local files are sent as data URLs",
+  resolution: "a resolution tier the dialect accepts, case-insensitive (e.g. 480p, 720p; which tiers a model supports is the vendor's call)",
+  ratio: `one of ${RATIOS.join(", ")}`,
+  duration: "seconds, a positive integer (the range is the model's)",
+  seed: "non-negative integer",
+  watermark: "true|false (default: the vendor default)",
+  generateAudio: "true|false, where the model supports it (2.0/2.5)",
+  outputFormat: "mp4|mov, where the model supports it (2.5)",
+  outDir: "where to write files (default: config output_dir, else cwd)",
+  json: "print one JSON object instead of the file path",
+  apiKey: "one-off API key; overrides env and auth.json",
+  baseUrl: "one-off provider origin, e.g. https://ark.cn-beijing.volces.com",
+  noWait: "create the task and print its id instead of waiting for the video",
+} as const;
+
+/** The body of `video generate --help`: models, the async contract, and examples. */
+function videoHelpText(): string {
+  return `
+Generate a video from a prompt. Unlike an image, a video is an asynchronous task:
+creating it is what gets billed, and the file appears one to five minutes later.
+
+Models (--provider picks the account, --model the exact id; config.toml decides what is allowed):
+  doubao-seedance-1-0-pro-250528   volcengine  text to video, or from one first frame
+  MiniMax-H3                       minimax     text to video, or from one first frame
+  A model must be listed in models = [...] under [providers.<name>.video].
+
+Cost and interruption:
+  The task is paid for when it is created. If this process is interrupted, do not
+  submit again: the task keeps running for a while, and "mediagen video status <id>"
+  fetches it later. --no-wait prints that id immediately for exactly this reason, and
+  the id is also written to stderr right after the task is created.
+
+One video per request:
+  --n belongs to image; here it is not an option at all. For a second variant, run the
+  command again (add a different --seed on the ark dialect if you want it to differ).
+
+Flags the vendor checks, not this CLI:
+  --resolution --duration are passed through; whether a given model supports a tier or
+  a range is validated by the vendor when the task is created, before anything is billed.
+
+Ark-only flags, rejected locally by any other dialect:
+  --seed --generate-audio --output-format --watermark. The minimax API takes only the
+  model, the content, the resolution, the duration and the ratio.
+
+Output:
+  Files are written to --out-dir (default: config output_dir, else the current
+  directory) as <provider>-<model>-<yyyyMMdd-HHmmss>-<index>.<ext>. With --json the
+  envelope carries task_id and status: "pending" or "running" with files: [] means the
+  task exists and was paid for — not that the command failed.
+
+Examples:
+  # text to video, then find the file on stdout
+  mediagen video generate "a red fox running through deep snow, golden hour" --provider volcengine
+
+  # animate the first frame of a still image
+  mediagen video generate "the same fox, now shaking the snow off" --image ./fox.png --provider volcengine
+
+  # do not wait: hand the task id to a later step (an agent usually wants this)
+  mediagen video generate "a slow pan over a frozen lake" --provider volcengine --no-wait --json
+
+  # collect it afterwards, without paying again
+  mediagen video status cgt-20261028-abcd --provider volcengine --out-dir ./clips`;
+}
+
+/** The body of `video status --help`. */
+function videoStatusHelpText(): string {
+  return `
+Look at one video task once, by the id a previous run printed. Nothing is created and
+nothing is billed: this is the way back into a task whose run was interrupted.
+
+It asks once. A task that is still pending or running is a success (exit 0) with its id
+and no files, so a caller can poll this command on its own schedule. Of the commands that
+talk to a provider, this is the only one that cannot spend money. A task that has
+finished is downloaded to --out-dir. A task that failed, was cancelled or expired exits 1
+with the vendor's own message.
+
+Flags not passed here are taken from config.toml: the provider from default_provider, the
+model from that provider's video table. The provider picks the account and the endpoint;
+--model is checked against config.toml and is not sent, because the task id decides
+everything else (it is only a fallback for the file name if the server reports no model).
+
+Examples:
+  mediagen video status cgt-20261028-abcd --provider volcengine
+  mediagen video status cgt-20261028-abcd --provider volcengine --json
+  mediagen video status cgt-20261028-abcd --provider volcengine --out-dir ./clips`;
+}
+
+/** Adds the flags of `video generate`. There is no --n and no --size: see videoHelpText(). */
+function addVideoOptions(command: Command): Command {
+  return command
+    .option("--provider <name>", VIDEO_OPTION_HELP.provider)
+    .option("--model <id>", VIDEO_OPTION_HELP.model)
+    .option("--image <path-or-url>", VIDEO_OPTION_HELP.image, collectImage)
+    .option("--resolution <tier>", VIDEO_OPTION_HELP.resolution)
+    .option("--ratio <ratio>", VIDEO_OPTION_HELP.ratio)
+    .option("--duration <seconds>", VIDEO_OPTION_HELP.duration)
+    .option("--seed <seed>", VIDEO_OPTION_HELP.seed)
+    .option("--watermark <bool>", VIDEO_OPTION_HELP.watermark)
+    .option("--generate-audio <bool>", VIDEO_OPTION_HELP.generateAudio)
+    .option("--output-format <format>", VIDEO_OPTION_HELP.outputFormat)
+    .option("--out-dir <dir>", VIDEO_OPTION_HELP.outDir)
+    .option("--no-wait", VIDEO_OPTION_HELP.noWait)
+    .option("--json", VIDEO_OPTION_HELP.json)
+    .option("--api-key <key>", VIDEO_OPTION_HELP.apiKey)
+    .option("--base-url <url>", VIDEO_OPTION_HELP.baseUrl);
+}
+
 /**
  * Assembles the whole command tree. `exitOverride()` and `configureOutput()`
  * must be set before any `.command()` call: commander copies both to a
@@ -362,7 +521,7 @@ export function createProgram(options: ProgramOptions = {}): Command {
   config
     .command("add <name>")
     .description("Create a [providers.<name>] table in config.toml")
-    .option("--api-type <dialect>", "protocol dialect: openai, dashscope or ark")
+    .option("--api-type <dialect>", "protocol dialect: openai, dashscope, ark or minimax")
     .option("--base-url <url>", "the provider's origin, e.g. https://ark.cn-beijing.volces.com")
     .option("--task <image|video>", "which task table to create (default: image)")
     .option("--model <id>", "the model id this task defaults to")
@@ -390,6 +549,35 @@ export function createProgram(options: ProgramOptions = {}): Command {
   addImageOptions(edit).addHelpText("after", imageHelpText("edit"));
   edit.action(async (prompt: string, flags: ImageFlags) => {
     await runImage(prompt, flags, true);
+  });
+
+  const video = program
+    .command("video")
+    .description("Generate video from a prompt; the task is asynchronous and billed on create");
+
+  const videoGenerate = video
+    .command("generate")
+    .description("Create a video task and save the result; add --image for a first frame")
+    .argument("<prompt>", "what to film; quote it and describe the subject, motion and camera");
+  addVideoOptions(videoGenerate).addHelpText("after", videoHelpText());
+  videoGenerate.action(async (prompt: string, flags: VideoFlags) => {
+    await runVideo(prompt, flags);
+  });
+
+  const videoStatus = video
+    .command("status")
+    .description("Look at one video task once, and save its video if it finished")
+    .argument("<task-id>", "the id a previous run printed");
+  videoStatus
+    .option("--provider <name>", VIDEO_OPTION_HELP.provider)
+    .option("--model <id>", VIDEO_OPTION_HELP.model)
+    .option("--out-dir <dir>", VIDEO_OPTION_HELP.outDir)
+    .option("--json", VIDEO_OPTION_HELP.json)
+    .option("--api-key <key>", VIDEO_OPTION_HELP.apiKey)
+    .option("--base-url <url>", VIDEO_OPTION_HELP.baseUrl)
+    .addHelpText("after", videoStatusHelpText());
+  videoStatus.action(async (taskId: string, flags: StatusFlags) => {
+    await runVideoStatusCommand(taskId, flags);
   });
 
   return program;
@@ -504,6 +692,53 @@ async function runImage(prompt: string, flags: ImageFlags, edit: boolean): Promi
     return;
   }
   emit(renderHuman(result.saved, result.response));
+}
+
+async function runVideo(prompt: string, flags: VideoFlags): Promise<void> {
+  const result = await runVideoGenerate(prompt, toVideoOptions(flags));
+
+  if (flags.json === true) {
+    writeLine(renderVideoJson(result));
+    return;
+  }
+  emit(renderVideoHuman(result));
+}
+
+async function runVideoStatusCommand(taskId: string, flags: StatusFlags): Promise<void> {
+  const options: VideoStatusOptions = {
+    provider: flags.provider,
+    model: flags.model,
+    outDir: flags.outDir,
+    apiKey: flags.apiKey,
+    baseUrl: flags.baseUrl,
+  };
+  const result = await runVideoStatus(taskId, options);
+
+  if (flags.json === true) {
+    writeLine(renderVideoJson(result));
+    return;
+  }
+  emit(renderVideoHuman(result));
+}
+
+/** Converts the raw flag strings into `VideoOptions`, so every failure is a UsageError. */
+function toVideoOptions(flags: VideoFlags): VideoOptions {
+  return {
+    provider: flags.provider,
+    model: flags.model,
+    image: flags.image ?? [],
+    resolution: flags.resolution,
+    ratio: parseChoice(flags.ratio, RATIOS, "--ratio"),
+    duration: parseInteger(flags.duration, "--duration"),
+    seed: parseInteger(flags.seed, "--seed"),
+    watermark: parseBool(flags.watermark, "--watermark"),
+    generateAudio: parseBool(flags.generateAudio, "--generate-audio"),
+    outputFormat: parseChoice(flags.outputFormat, ["mp4", "mov"], "--output-format"),
+    outDir: flags.outDir,
+    apiKey: flags.apiKey,
+    baseUrl: flags.baseUrl,
+    noWait: flags.wait === false,
+  };
 }
 
 /** Converts the raw flag strings into `GenerateOptions`, so every failure is a UsageError. */
@@ -762,10 +997,14 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
   const provider = name.trim();
   if (provider === "") throw new UsageError("a provider name is required");
 
-  const apiType = parseChoice(flags.apiType, ["openai", "dashscope", "ark", "qwen"], "--api-type");
+  const apiType = parseChoice(
+    flags.apiType,
+    ["openai", "dashscope", "ark", "minimax", "qwen"],
+    "--api-type",
+  );
   if (apiType === undefined) {
     throw new UsageError(
-      '--api-type is required: "openai", "dashscope" or "ark" ("qwen" still works as a deprecated alias of "openai")',
+      '--api-type is required: "openai", "dashscope", "ark" or "minimax" ("qwen" still works as a deprecated alias of "openai")',
     );
   }
   if (flags.baseUrl === undefined) throw new UsageError("--base-url is required");
@@ -837,8 +1076,8 @@ function runConfigAdd(name: string, flags: ConfigAddFlags): void {
       : `set ${shellArg(apiKeyEnv)}, or run "${loginHint}"`;
   if (adapterPath(dialect, task) === undefined) {
     writeErrLine(
-      `note: the "${dialect}" dialect has no "${task}" adapter yet; the table is stored ` +
-        `and "config show" will mark it until it lands`,
+      `note: the "${dialect}" dialect has no "${task}" task; the table is stored, and ` +
+        `"config show" will say the same`,
     );
   }
 
@@ -895,7 +1134,7 @@ function runConfigShow(flags: { json?: boolean }): void {
 
   if (views.length === 0) {
     lines.push(
-      "  (none; run \"mediagen config add <name> --api-type <openai|dashscope|ark> --base-url <origin> --model <id>\")",
+      "  (none; run \"mediagen config add <name> --api-type <openai|dashscope|ark|minimax> --base-url <origin> --model <id>\")",
     );
   }
 
@@ -939,14 +1178,14 @@ function runConfigShow(flags: { json?: boolean }): void {
       }
       // A task with no adapter has no endpoint to show: the path belongs to the
       // adapter, and inventing one here would be a second source of truth.
-      // Naming the missing half matters: "(no adapter yet)" on a task that has
+      // Naming the missing half matters: a dialect note on a task that has
       // one, but a placeholder host, sends the user looking for the wrong fix.
       if (taskView.endpoint !== undefined) {
         lines.push(`      endpoint: ${taskView.endpoint} (computed)`);
       } else {
         // Keeps the `endpoint:` prefix so a reader can grep for the one line that
         // says whether a URL exists at all.
-        lines.push(`      endpoint: (${taskView.endpoint_note ?? "no adapter yet"})`);
+        lines.push(`      endpoint: (${taskView.endpoint_note ?? "no endpoint"})`);
       }
     }
   }
@@ -1051,7 +1290,9 @@ function buildProviderView(name: string, entry: ProviderEntry): ProviderView {
       if (effectiveDialect === undefined) {
         taskView.endpoint_note = "api_type is not set";
       } else if (path === undefined) {
-        taskView.endpoint_note = "no adapter yet";
+        // Not "yet": this dialect is not going to grow this task. Saying so is the
+        // difference between "edit your config" and "wait for a release".
+        taskView.endpoint_note = `the ${effectiveDialect} dialect has no ${task} task`;
       } else if (base === undefined) {
         taskView.endpoint_note = "base_url is not a URL yet";
       } else if (block.path === undefined && vendorPathIssue(base) !== undefined) {
