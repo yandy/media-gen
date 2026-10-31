@@ -204,6 +204,19 @@ describe("mediagen --help", () => {
     expect(createProgram()).not.toBe(program);
   });
 
+  it("names both media kinds in its one-line description", async () => {
+    const result = await run(["--help"]);
+
+    expect(result.stdout).toMatch(/images \(Bailian qwen/);
+    expect(result.stdout).toMatch(/generate video/);
+  });
+
+  it("carries no behavioural rule block: those live in the skill", async () => {
+    const result = await run(["--help"]);
+
+    expect(result.stdout).not.toContain("Working as an agent");
+  });
+
   it("exits 2 on an unknown command", async () => {
     const result = await run(["nope"]);
 
@@ -294,6 +307,19 @@ describe("image help text", () => {
     expect(result.code).toBe(2);
     expect(result.stdout).toContain("generate");
     expect(result.stdout).toContain("edit");
+  });
+});
+
+describe("login help text", () => {
+  it("says where a key comes from and which entry owns it", async () => {
+    const result = await run(["login", "--help"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("--api-key");
+    expect(result.stdout).toContain("api_key_env");
+    expect(result.stdout).toContain("auth.json");
+    expect(result.stdout).toMatch(/no\s+protocol-level default/);
+    expect(result.stdout).toMatch(/masked/);
   });
 });
 

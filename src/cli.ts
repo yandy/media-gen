@@ -210,6 +210,13 @@ merely read; 1 an API/config/runtime failure, 2 a usage error.
 Run "mediagen image generate --help" or "mediagen video generate --help" for the flag
 list, the model table and examples.`;
 
+/** The body of `login --help`: where a key comes from, and which entry owns it. */
+const LOGIN_HELP = `
+A key belongs to a provider entry in config.toml, and every task of that entry uses it:
+--api-key on any command, else the entry's api_key_env variable, else auth.json. There is no
+protocol-level default variable, so two entries that speak the same protocol can hold
+different keys. Stored keys are only ever printed masked.`;
+
 /** Shared body of the `image generate` / `image edit` help; examples match the command. */
 function imageHelpText(command: "generate" | "edit"): string {
   const intro =
@@ -466,7 +473,7 @@ export function createProgram(options: ProgramOptions = {}): Command {
 
   program
     .description(
-      "Generate and edit images through Alibaba Bailian (qwen) and Volcengine Ark (doubao/seedream).",
+      "Generate and edit images (Bailian qwen, Volcengine Ark doubao/seedream) and generate video (Ark seedance, MiniMax H3).",
     )
     .exitOverride()
     .configureOutput({
@@ -481,6 +488,7 @@ export function createProgram(options: ProgramOptions = {}): Command {
     .option("--provider <name>", "provider name (default: config default_provider)")
     .option("--api-key <key>", "the key; omit to be prompted (needs a TTY)")
     .option("--json", "print a JSON result")
+    .addHelpText("after", LOGIN_HELP)
     .action(async (flags: LoginFlags) => {
       await runLogin(flags, deps);
     });
