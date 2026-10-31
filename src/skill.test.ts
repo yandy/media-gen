@@ -37,6 +37,21 @@ describe("skills/mediagen/SKILL.md", () => {
     expect(description).not.toMatch(/any (?:image|video) request/i);
   });
 
+  it("keeps vendor names out of the description: they cost tokens and the body names none", () => {
+    for (const vendor of [
+      /bailian/i,
+      /volcengine/i,
+      /\bark\b/i,
+      /minimax/i,
+      /qwen/i,
+      /doubao/i,
+      /seedream/i,
+      /seedance/i,
+    ]) {
+      expect(description, `the description names a vendor: ${vendor}`).not.toMatch(vendor);
+    }
+  });
+
   it("stays on one screen", () => {
     expect(lines.length).toBeLessThanOrEqual(110);
   });

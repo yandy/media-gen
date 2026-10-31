@@ -1,6 +1,6 @@
 ---
 name: mediagen
-description: How to drive `mediagen`, a non-interactive CLI that generates and edits images (Alibaba Bailian qwen-image; Volcengine Ark doubao/seedream) and generates short videos (Ark doubao/seedance; MiniMax H3) through vendor APIs, writing every result to a local file and printing its path. Covers what the tool can and cannot do, one-time setup, four commands worth copying, and the rules that keep a paid request from being wasted.
+description: How to drive `mediagen`, a non-interactive CLI that generates and edits images and generates short videos, writing every result to a local file and printing its path. Covers what it can and cannot do, one-time setup, four commands worth copying, and the rules that keep a paid request from being wasted.
 ---
 
 # mediagen
