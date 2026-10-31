@@ -1,0 +1,52 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Superseded runs on the *same* ref are cancelled (rapid pushes to a PR branch).
+# A push to main and its PR key differently (`refs/heads/main` vs
+# `refs/pull/N/merge`), so they run alongside each other, not instead.
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lockfile-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Verify package-lock.json is in sync
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          git diff --exit-code -- package-lock.json
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      # The suite a developer runs, unmodified: src/cli.entry.test.ts already
+      # builds dist/ for its own assertions.
+      - run: npm run typecheck && npm test
+      # The plain build, plus the only check that the published tarball really
+      # carries dist/ and skills/ — a broken "files" array ships an empty package.
+      - run: npm run build
+      - name: Assert the tarball carries dist/ and skills/
+        run: |
+          npm pack --dry-run 2>&1 | tee /tmp/pack.log
+          # Anchored to the `npm notice` contents lines: the unanchored string also
+          # appears in tsup's build echo above, which would make this assertion pass
+          # for a tarball that does not contain the file.
+          grep -qE "^npm notice .*dist/cli\.js" /tmp/pack.log
+          grep -qE "^npm notice .*skills/mediagen/SKILL\.md" /tmp/pack.log

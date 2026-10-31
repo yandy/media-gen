@@ -239,7 +239,8 @@ npm run dev -- image generate --help
 （`src/api/index.ts`）里的一行，以及适配器上的 `path` 字段 —— 方言拼在 `base_url`
 后面的那个端点文件名。
 
-发布：`npm pack --dry-run` 检查 tarball（发布 `dist/` 和 `skills/`），然后
-`npm version patch && npm publish`。设计文档在 `docs/superpowers/specs/`。
+发布：打一个 `vX.Y.Z` 的 GitHub Release，Actions 会自动发布 —— 见
+`docs/guides/release.md`（发布的是 `dist/` 和 `skills/`，CI 每次 push 都会跑
+`npm pack --dry-run`）。设计文档在 `docs/superpowers/specs/`。
 
 MIT
