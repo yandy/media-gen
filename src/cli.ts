@@ -184,7 +184,7 @@ Built for AI agents: explicit flags, no interactive prompts, machine-readable ou
 
 Quickstart:
   mediagen config show                                    # any command creates config.toml on first use
-  mediagen config add my-proxy --api-type qwen --base-url https://proxy.example.com/v1 --model qwen-image-3.0
+  mediagen config add my-proxy --api-type openai --base-url https://proxy.example.com --model qwen-image-3.0
   mediagen login --provider my-proxy --api-key sk-...      # store a key in auth.json
   mediagen image generate "a red fox in fresh snow" --provider my-proxy --out-dir ./out
   mediagen image edit "make the sky sunset orange" --image ./photo.jpg
@@ -462,6 +462,23 @@ function addVideoOptions(command: Command): Command {
 }
 
 /**
+ * The string behind `--version`, read from the `package.json` that ships beside
+ * `dist/cli.js` — the tarball's version is the only version worth reporting, and
+ * hard-coding it here would drift at the next bump. `undefined` when the file is
+ * not there (the CLI inlined into some other bundle), in which case the flag is
+ * simply not registered instead of printing a made-up number.
+ */
+function packageVersion(): string | undefined {
+  try {
+    const raw = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === "string" ? parsed.version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Assembles the whole command tree. `exitOverride()` and `configureOutput()`
  * must be set before any `.command()` call: commander copies both to a
  * subcommand when it is created, so setting them later would only affect the
@@ -470,6 +487,11 @@ function addVideoOptions(command: Command): Command {
 export function createProgram(options: ProgramOptions = {}): Command {
   const deps = options.deps ?? {};
   const program = new Command("mediagen");
+
+  const version = packageVersion();
+  if (version !== undefined) {
+    program.version(version, "-V, --version", "print the packaged version and exit");
+  }
 
   program
     .description(

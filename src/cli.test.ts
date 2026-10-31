@@ -225,6 +225,44 @@ describe("mediagen --help", () => {
   });
 });
 
+describe("mediagen --version", () => {
+  /** The tarball's version is the only one worth printing, so the test reads the same file. */
+  function packagedVersion(): string {
+    const raw = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    return (JSON.parse(raw) as { version: string }).version;
+  }
+
+  it("prints the version from package.json and exits 0", async () => {
+    const result = await run(["--version"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe(packagedVersion());
+    expect(result.stderr).toBe("");
+  });
+
+  it("answers -V the same way", async () => {
+    const result = await run(["-V"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe(packagedVersion());
+  });
+
+  it("still serves --version when config.toml is malformed", async () => {
+    writeConfig('[providers.qwen\nbase_url = "https://x"\n');
+
+    const result = await run(["--version"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe(packagedVersion());
+  });
+
+  it("documents the flag in --help", async () => {
+    const result = await run(["--help"]);
+
+    expect(result.stdout).toContain("-V, --version");
+  });
+});
+
 describe("image help text", () => {
   const IMAGE_FLAGS = [
     "--provider <name>",

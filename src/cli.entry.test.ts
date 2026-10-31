@@ -196,6 +196,24 @@ describe("packaged entry point", () => {
     expect(result.stdout).not.toContain("Usage: mediagen");
   });
 
+  it("reports the packaged version through the symlink", () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+      version: string;
+    };
+
+    // The version lives in the package.json that sits beside dist/cli.js: this is the
+    // one assertion that proves the built bundle can still reach it after bundling.
+    const result = spawnSync(process.execPath, [link, "--version"], {
+      env,
+      encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
+    });
+
+    expectRan(result);
+    expect(result.stdout.trim()).toBe(pkg.version);
+    expect(result.stderr).toBe("");
+  });
+
   it("is the file package.json publishes as the mediagen binary", () => {
     const pkg = JSON.parse(
       fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"),
