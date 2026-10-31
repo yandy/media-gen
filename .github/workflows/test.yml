@@ -1,0 +1,48 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A push to main and its pull request run the same few-second suite. Cancel the
+# older run instead of paying for both.
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lockfile-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Verify package-lock.json is in sync
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          git diff --exit-code -- package-lock.json
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      # The suite a developer runs, unmodified: src/cli.entry.test.ts already
+      # builds dist/ for its own assertions.
+      - run: npm run typecheck && npm test
+      # The plain build, plus the only check that the published tarball really
+      # carries dist/ and skills/ — a broken "files" array ships an empty package.
+      - run: npm run build
+      - name: Assert the tarball carries dist/ and skills/
+        run: |
+          npm pack --dry-run 2>&1 | tee /tmp/pack.log
+          grep -q "dist/cli.js" /tmp/pack.log
+          grep -q "skills/mediagen/SKILL.md" /tmp/pack.log
