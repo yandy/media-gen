@@ -6,8 +6,9 @@ on:
   pull_request:
     branches: [main]
 
-# A push to main and its pull request run the same few-second suite. Cancel the
-# older run instead of paying for both.
+# Superseded runs on the *same* ref are cancelled (rapid pushes to a PR branch).
+# A push to main and its PR key differently (`refs/heads/main` vs
+# `refs/pull/N/merge`), so they run alongside each other, not instead.
 concurrency:
   group: test-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -44,5 +45,8 @@ jobs:
       - name: Assert the tarball carries dist/ and skills/
         run: |
           npm pack --dry-run 2>&1 | tee /tmp/pack.log
-          grep -q "dist/cli.js" /tmp/pack.log
-          grep -q "skills/mediagen/SKILL.md" /tmp/pack.log
+          # Anchored to the `npm notice` contents lines: the unanchored string also
+          # appears in tsup's build echo above, which would make this assertion pass
+          # for a tarball that does not contain the file.
+          grep -qE "^npm notice .*dist/cli\.js" /tmp/pack.log
+          grep -qE "^npm notice .*skills/mediagen/SKILL\.md" /tmp/pack.log

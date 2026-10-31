@@ -74,8 +74,9 @@ a one-line change later (`strategy.matrix.node: [22, 24]`); C became its own tas
 ### `.github/workflows/test.yml`
 
 Triggers: `push` to `main`, `pull_request` to `main`. `concurrency` keyed on the ref with
-`cancel-in-progress`, because a push and its PR produce two identical runs of a 4-second
-suite. Jobs:
+`cancel-in-progress`, so superseded runs on the same ref are cancelled (rapid pushes to a PR
+branch). A push to `main` and its PR key on different refs — `refs/heads/main` versus
+`refs/pull/N/merge` — so those two run alongside each other rather than cancelling. Jobs:
 
 1. `lockfile-sync` — `actions/checkout@v7`, `actions/setup-node@v7` (node 24), then
    `npm install --package-lock-only --ignore-scripts --no-audit --no-fund` and
@@ -136,6 +137,8 @@ pointing at `docs/guides/release.md`, keeping the `npm pack --dry-run` fact wher
   put it in the document; the guard and the document must agree.
 - Whether `lockfile-sync` shares the `test` job. Two jobs is the reference's shape; one job
   is fewer runner starts. Follow the reference.
-- Exact `npm pack --dry-run` assertion: grep for `dist/cli.js` and `skills/mediagen/SKILL.md`
-  in the file list, rather than trusting the human-readable summary.
+- Exact `npm pack --dry-run` assertion: settled during implementation — anchor both greps on
+  the `npm notice` contents lines (`^npm notice .*dist/cli\.js`). Unanchored, `dist/cli.js`
+  also matches tsup's build echo in the same merged stream, so the assertion would pass for a
+  tarball that does not contain the file.
 - The Chinese wording in `docs/guides/release.md`.
