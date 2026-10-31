@@ -43,9 +43,9 @@ project has, or when the user asks for it by name.
 ## Setup, once
 
 ```bash
-mediagen config show                                    # any command writes and validates config.toml on first use
-mediagen login --provider volcengine --api-key sk-...   # or aliyun / minimax / an entry you added
-mediagen auth status                                    # which key each provider would use, masked
+mediagen config show                          # any command writes and validates config.toml on first use
+mediagen login --api-key sk-...               # the key for the default provider; --provider <name> for another
+mediagen auth status                          # which key each provider would use, masked
 ```
 
 Providers, their protocols and their models live in `config.toml`; `mediagen config add`
@@ -56,17 +56,21 @@ The README covers the file's shape.
 
 ```bash
 # a new image; files land in --out-dir (default: config output_dir, else the cwd)
-mediagen image generate "a red fox in fresh snow, soft morning light" --provider aliyun --out-dir ./out
+mediagen image generate "a red fox in fresh snow, soft morning light" --out-dir ./out
 
 # change a local image (local paths are read and sent as data URLs)
-mediagen image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg --provider aliyun
+mediagen image edit "make the sky sunset orange, keep the composition" --image ./photo.jpg
 
 # a video task without waiting for the render (the id comes back immediately)
-mediagen video generate "a fox running through deep snow, golden hour" --provider volcengine --no-wait --json
+mediagen video generate "a fox running through deep snow, golden hour" --no-wait --json
 
 # collect a task you already paid for; nothing is created and nothing is billed
-mediagen video status cgt-20261028-abcd --provider volcengine --json
+mediagen video status cgt-20261028-abcd --json
 ```
+
+These go to whichever entry `config.toml` marks as its default. `--provider <name>` picks a
+different entry from that file; the names in the CLI's own examples are only what the first
+run seeds, and `mediagen config show` prints the ones this machine has.
 
 Add `--json` whenever you intend to parse the result: without it stdout is one absolute
 path per line and warnings go to stderr. Keep `--n` at 1 while iterating on a prompt: on

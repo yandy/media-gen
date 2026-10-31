@@ -52,6 +52,14 @@ describe("skills/mediagen/SKILL.md", () => {
     }
   });
 
+  it("hardcodes no seeded provider name: the entries come from config.toml", () => {
+    for (const seed of ["aliyun", "volcengine", "minimax"]) {
+      expect(body, `the skill hardcodes the seeded provider ${seed}`).not.toMatch(
+        new RegExp(seed, "i"),
+      );
+    }
+  });
+
   it("stays on one screen", () => {
     expect(lines.length).toBeLessThanOrEqual(110);
   });
