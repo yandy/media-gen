@@ -265,8 +265,8 @@ unmasked key. A provider speaking an existing dialect needs no code — only a
 `DIALECTS` (`src/api/index.ts`) plus its `path` field — the endpoint file name the
 dialect appends to `base_url`.
 
-Release: `npm pack --dry-run` to inspect the tarball (`dist/` and `skills/` are
-published), then `npm version patch && npm publish`. Design docs live in
-`docs/superpowers/specs/`.
+Release: cut a `vX.Y.Z` GitHub Release and Actions publishes it — see
+`docs/guides/release.md` (`dist/` and `skills/` are what ships, and CI runs
+`npm pack --dry-run` on every push). Design docs live in `docs/superpowers/specs/`.
 
 MIT
