@@ -122,14 +122,29 @@ code `TaskNotFinished`, and `video status <id>` resumes it without paying again.
 ## Configuration
 
 `config.toml` — the file you edit — lives in the first of
-`$MEDIAGEN_CLI_CONFIG_DIR`, `$XDG_CONFIG_HOME/mediagen-cli`, `~/.config/mediagen-cli`.
+`$MEDIAGEN_CLI_CONFIG_DIR`, `$XDG_CONFIG_HOME/mediagen`, `~/.config/mediagen`.
 
 `auth.json` (mode `600`) is **state, not config**, and lives apart from it: the first
-of `$MEDIAGEN_CLI_STATE_DIR`, `$XDG_STATE_HOME/mediagen-cli`,
-`~/.local/state/mediagen-cli`. `~/.config` is the directory people sync, share and
+of `$MEDIAGEN_CLI_STATE_DIR`, `$XDG_STATE_HOME/mediagen`,
+`~/.local/state/mediagen`. `~/.config` is the directory people sync, share and
 commit; a key store there is one `.gitignore` mistake away from a leaked key. The
 state directory is machine-local by definition, which is what a device-bound
 credential is.
+
+Upgrading from 0.1.1 or earlier: both directories dropped the `-cli` suffix, and nothing
+migrates them for you. Move the files, not the directories — a first run of this version
+already creates the new directories, and `mv dir dir` would bury your config inside them:
+
+```bash
+mkdir -p ~/.config/mediagen ~/.local/state/mediagen
+mv ~/.config/mediagen-cli/config.toml ~/.config/mediagen/config.toml
+mv ~/.local/state/mediagen-cli/auth.json ~/.local/state/mediagen/auth.json
+```
+
+(With `XDG_CONFIG_HOME` or `XDG_STATE_HOME` set, the paths are `<that>/mediagen-cli` →
+`<that>/mediagen` instead. If you set `MEDIAGEN_CLI_CONFIG_DIR` or
+`MEDIAGEN_CLI_STATE_DIR`, the names are unchanged and there is nothing to move. Skip a
+line whose `mediagen-cli` path does not exist — most users never had an `auth.json`.)
 
 ```toml
 default_provider = "volcengine"

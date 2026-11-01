@@ -7,12 +7,12 @@ import { configDir } from "./config.js";
 /**
  * The isolation itself is the thing under test: if vitest.sandbox.ts stops
  * running, every other test file silently starts reading the developer's real
- * ~/.config/mediagen-cli again.
+ * ~/.config/mediagen again.
  */
 describe("test sandbox", () => {
   it("points config lookups at a throwaway directory", () => {
     expect(configDir().startsWith(os.tmpdir())).toBe(true);
-    expect(configDir()).not.toBe(path.join(os.userInfo().homedir, ".config", "mediagen-cli"));
+    expect(configDir()).not.toBe(path.join(os.userInfo().homedir, ".config", "mediagen"));
   });
 
   it("puts the API key store in a throwaway state directory", () => {

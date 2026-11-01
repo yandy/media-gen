@@ -103,7 +103,7 @@ describe("authPath", () => {
     const xdgState = path.join(tempDir, "xdg-state");
     process.env.XDG_STATE_HOME = xdgState;
 
-    expect(authPath()).toBe(path.join(xdgState, "mediagen-cli", "auth.json"));
+    expect(authPath()).toBe(path.join(xdgState, "mediagen", "auth.json"));
   });
 
   it("falls back to ~/.local/state", () => {
@@ -113,7 +113,7 @@ describe("authPath", () => {
     process.env.HOME = home;
 
     expect(authPath()).toBe(
-      path.join(home, ".local", "state", "mediagen-cli", "auth.json"),
+      path.join(home, ".local", "state", "mediagen", "auth.json"),
     );
   });
 });
