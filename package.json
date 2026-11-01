@@ -1,6 +1,6 @@
 {
   "name": "@yandy0725/mediagen-cli",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Non-interactive image generation and editing, plus short video generation, for agents: qwen-image, doubao/seedream, doubao/seedance, MiniMax H3, files on disk, JSON output.",
   "type": "module",
   "license": "MIT",
