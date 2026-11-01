@@ -268,6 +268,10 @@ npm test         # vitest, fully offline: fetch is stubbed everywhere
 npm run dev -- image generate --help
 ```
 
+Tests live in `tests/` — one file per module, imported from `../src/` — and never
+beside the sources; `vitest.config.ts` picks up `tests/**/*.test.ts` and nothing else.
+`tsc --noEmit` typechecks them too.
+
 `src/cli.ts` wires commander and maps errors to exit codes; `src/generate.ts` runs
 the pipeline (validate → resolve → call → download → report); `src/api/{qwen,ark,dashscope}.ts`
 are the dialect adapters behind the `DialectAdapter` seam in `src/types.ts`, with

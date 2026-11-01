@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, UsageError } from "../errors.js";
-import type { ImageRequest } from "../types.js";
-import { buildQwenRequest, parseQwenResponse, QwenDialect } from "./qwen.js";
+import { ApiError, UsageError } from "../src/errors.js";
+import type { ImageRequest } from "../src/types.js";
+import { buildQwenRequest, parseQwenResponse, QwenDialect } from "../src/api/qwen.js";
 
 function request(overrides: Partial<ImageRequest> = {}): ImageRequest {
   return {

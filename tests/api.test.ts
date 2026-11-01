@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ConfigError } from "../errors.js";
-import type { Dialect } from "../types.js";
-import { ArkDialect, ArkVideoDialect } from "./ark.js";
-import { adapterPath, getAdapter } from "./index.js";
-import { MinimaxVideoDialect } from "./minimax.js";
-import { QwenDialect } from "./qwen.js";
+import { ConfigError } from "../src/errors.js";
+import type { Dialect } from "../src/types.js";
+import { ArkDialect, ArkVideoDialect } from "../src/api/ark.js";
+import { adapterPath, getAdapter } from "../src/api/index.js";
+import { MinimaxVideoDialect } from "../src/api/minimax.js";
+import { QwenDialect } from "../src/api/qwen.js";
 
 function thrownBy(action: () => unknown): Error {
   try {

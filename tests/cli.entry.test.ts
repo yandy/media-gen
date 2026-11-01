@@ -2,7 +2,7 @@
  * Regression coverage for the *packaged* entry point: `dist/cli.js` as npm
  * installs it, reached through the symlink that `bin.mediagen` creates.
  *
- * `src/cli.test.ts` drives `main()` in-process, which never executes the shebang,
+ * `tests/cli.test.ts` drives `main()` in-process, which never executes the shebang,
  * the invoked-as-script guard, the argv slicing or the `process.exit` wiring. This
  * file spawns real child processes against the real build artifact so those four
  * lines are covered too. It lives in its own file so the fast in-process suite

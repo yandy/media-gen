@@ -54,5 +54,5 @@ gh run watch
 - 应急的本地发布：`npm login`（security key 2FA）+ `npm publish` 仍然可用，但没有
   provenance，npm 包页不会显示 "Built and signed on GitHub Actions"。
 - CI（`.github/workflows/test.yml`）在 `push` 到 `main` 和所有 PR 上跑，只在
-  `ubuntu-latest` + Node 24。Windows 不在矩阵里：`src/cli.entry.test.ts` 直接 spawn
+  `ubuntu-latest` + Node 24。Windows 不在矩阵里：`tests/cli.entry.test.ts` 直接 spawn
   npm 的 `.bin` shim，Windows 上那是 `.cmd`，不是一次矩阵配置能解决的。

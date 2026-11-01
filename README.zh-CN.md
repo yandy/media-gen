@@ -242,6 +242,9 @@ npm test         # vitest，完全离线：所有地方的 fetch 都被打桩
 npm run dev -- image generate --help
 ```
 
+测试统一放在 `tests/`：一个模块一个文件，从 `../src/` 引入，不再与源码同目录；
+`vitest.config.ts` 只收集 `tests/**/*.test.ts`，`tsc --noEmit` 也一并检查它们。
+
 `src/cli.ts` 负责 commander 接线和错误到退出码的映射；`src/generate.ts` 是流水线
 （校验 → 解析 → 调用 → 下载 → 汇报）；`src/api/{qwen,ark,dashscope}.ts` 是
 `src/types.ts` 中 `DialectAdapter` 接缝背后的方言适配器，周围是 `config.ts`、

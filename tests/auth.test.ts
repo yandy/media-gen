@@ -9,9 +9,9 @@ import {
   removeApiKey,
   resolveApiKey,
   saveApiKey,
-} from "./auth.js";
-import { ConfigError } from "./errors.js";
-import type { ProviderConfig } from "./types.js";
+} from "../src/auth.js";
+import { ConfigError } from "../src/errors.js";
+import type { ProviderConfig } from "../src/types.js";
 
 const originalEnv = {
   MEDIAGEN_CLI_CONFIG_DIR: process.env.MEDIAGEN_CLI_CONFIG_DIR,

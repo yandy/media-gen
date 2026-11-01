@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, UsageError } from "./errors.js";
+import { ApiError, UsageError } from "../src/errors.js";
 import {
   REQUEST_TIMEOUT_MS as SINGLE_REQUEST_TIMEOUT_MS,
   callApi,
   createTask,
   parseJsonOrThrow,
   pollTask,
-} from "./http.js";
-import type { ImageRequest, ParsedResponse, ProviderConfig, Task, TaskBinding } from "./types.js";
+} from "../src/http.js";
+import type { ImageRequest, ParsedResponse, ProviderConfig, Task, TaskBinding } from "../src/types.js";
 
 const API_KEY = "sk-test-secret-key-0123456789";
 const QWEN_URL = "https://dashscope.example.com/compatible-mode/v1/images/generations";

@@ -2,10 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { authPath, loadAuth } from "./auth.js";
-import { createProgram, main, requestsHelpOrVersion, type CliDeps } from "./cli.js";
-import { configPath, loadConfig } from "./config.js";
-import { SEED_CONFIG } from "./providers.js";
+import { authPath, loadAuth } from "../src/auth.js";
+import { createProgram, main, requestsHelpOrVersion, type CliDeps } from "../src/cli.js";
+import { configPath, loadConfig } from "../src/config.js";
+import { SEED_CONFIG } from "../src/providers.js";
 
 const API_KEY = "sk-test1234567890";
 /** maskKey() shows the first four and last four characters only. */
