@@ -2,15 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareConfigFile } from "./config.js";
-import { ApiError, ConfigError, UsageError } from "./errors.js";
+import { prepareConfigFile } from "../src/config.js";
+import { ApiError, ConfigError, UsageError } from "../src/errors.js";
 import {
   resolveOutDir,
   runGenerate,
   validateSize,
   type GenerateOptions,
-} from "./generate.js";
-import type { Dialect, ImageResult } from "./types.js";
+} from "../src/generate.js";
+import type { Dialect, ImageResult } from "../src/types.js";
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
 const QWEN_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/images/generations";

@@ -2,17 +2,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ArkVideoDialect } from "./api/ark.js";
-import { MinimaxVideoDialect } from "./api/minimax.js";
-import { writeConfigFile } from "./config.js";
-import { ApiError, ConfigError, UsageError } from "./errors.js";
-import type { VideoDeps } from "./types.js";
+import { ArkVideoDialect } from "../src/api/ark.js";
+import { MinimaxVideoDialect } from "../src/api/minimax.js";
+import { writeConfigFile } from "../src/config.js";
+import { ApiError, ConfigError, UsageError } from "../src/errors.js";
+import type { VideoDeps } from "../src/types.js";
 import {
   buildVideoRequest,
   runVideoGenerate,
   runVideoStatus,
   validateResolution,
-} from "./video.js";
+} from "../src/video.js";
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02]);
 

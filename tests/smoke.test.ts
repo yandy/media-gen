@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { main } from "./cli.js";
-import { loadConfig } from "./config.js";
+import { main } from "../src/cli.js";
+import { loadConfig } from "../src/config.js";
 
 /**
  * End-to-end smoke test: the real `main()` from src/cli.ts, the real config

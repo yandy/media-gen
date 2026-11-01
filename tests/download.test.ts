@@ -8,9 +8,9 @@ import {
   downloadMedia,
   inferExtension,
   uniquePath,
-} from "./download.js";
-import { ApiError } from "./errors.js";
-import type { AsyncTaskResult, ImageResult } from "./types.js";
+} from "../src/download.js";
+import { ApiError } from "../src/errors.js";
+import type { AsyncTaskResult, ImageResult } from "../src/types.js";
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
 const HTML_BYTES = Buffer.from("<!doctype html><html><body>proxy blocked</body></html>");

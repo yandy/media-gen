@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { UsageError } from "./errors.js";
-import { isUrl, normalizeHttpBaseUrl, nowStamp, slugModel, toImageInput } from "./util.js";
+import { UsageError } from "../src/errors.js";
+import { isUrl, normalizeHttpBaseUrl, nowStamp, slugModel, toImageInput } from "../src/util.js";
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02]);
 

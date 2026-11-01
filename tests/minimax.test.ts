@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, UsageError } from "../errors.js";
-import type { VideoRequest } from "../types.js";
+import { ApiError, UsageError } from "../src/errors.js";
+import type { VideoRequest } from "../src/types.js";
 import {
   MinimaxVideoDialect,
   buildMinimaxVideoRequest,
@@ -8,7 +8,7 @@ import {
   minimaxPollPath,
   parseMinimaxError,
   taskIdFromMinimax,
-} from "./minimax.js";
+} from "../src/api/minimax.js";
 
 function thrownBy(action: () => unknown): Error {
   try {

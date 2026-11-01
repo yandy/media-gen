@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, ConfigError, UsageError } from "./errors.js";
-import { renderError, renderHuman, renderJson, renderVideoHuman, renderVideoJson } from "./output.js";
-import type { ParsedResponse, SavedFile, VideoResult } from "./types.js";
+import { ApiError, ConfigError, UsageError } from "../src/errors.js";
+import { renderError, renderHuman, renderJson, renderVideoHuman, renderVideoJson } from "../src/output.js";
+import type { ParsedResponse, SavedFile, VideoResult } from "../src/types.js";
 
 const PARTIAL_NOTE = /2 file\(s\) written, 1 failed/;
 

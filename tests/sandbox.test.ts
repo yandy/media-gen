@@ -1,8 +1,8 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { authPath } from "./auth.js";
-import { configDir } from "./config.js";
+import { authPath } from "../src/auth.js";
+import { configDir } from "../src/config.js";
 
 /**
  * The isolation itself is the thing under test: if vitest.sandbox.ts stops

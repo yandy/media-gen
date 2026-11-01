@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, UsageError } from "../errors.js";
-import type { ImageRequest } from "../types.js";
+import { ApiError, UsageError } from "../src/errors.js";
+import type { ImageRequest } from "../src/types.js";
 import {
   ArkDialect,
   ArkVideoDialect,
@@ -10,7 +10,7 @@ import {
   buildArkVideoRequest,
   parseArkResponse,
   taskIdFromArk,
-} from "./ark.js";
+} from "../src/api/ark.js";
 
 function request(overrides: Partial<ImageRequest> = {}): ImageRequest {
   return {

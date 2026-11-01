@@ -4,8 +4,8 @@ import {
   parseDashscopeError,
   parseDashscopeResponse,
   toDashscopeSize,
-} from "./dashscope.js";
-import type { ImageRequest } from "../types.js";
+} from "../src/api/dashscope.js";
+import type { ImageRequest } from "../src/types.js";
 
 function request(overrides: Partial<ImageRequest> = {}): ImageRequest {
   return { model: "qwen-image-2.0-pro", prompt: "a red fox", images: [], n: 1, ...overrides };

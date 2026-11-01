@@ -14,8 +14,8 @@ import {
   stateDir,
   validateProviderShape,
   type TaskConfig,
-} from "./config.js";
-import { ConfigError } from "./errors.js";
+} from "../src/config.js";
+import { ConfigError } from "../src/errors.js";
 
 const originalEnv = {
   MEDIAGEN_CLI_CONFIG_DIR: process.env.MEDIAGEN_CLI_CONFIG_DIR,

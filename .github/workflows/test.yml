@@ -36,7 +36,7 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
-      # The suite a developer runs, unmodified: src/cli.entry.test.ts already
+      # The suite a developer runs, unmodified: tests/cli.entry.test.ts already
       # builds dist/ for its own assertions.
       - run: npm run typecheck && npm test
       # The plain build, plus the only check that the published tarball really
