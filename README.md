@@ -132,16 +132,19 @@ state directory is machine-local by definition, which is what a device-bound
 credential is.
 
 Upgrading from 0.1.1 or earlier: both directories dropped the `-cli` suffix, and nothing
-migrates them for you. Move them once, then run any command:
+migrates them for you. Move the files, not the directories — a first run of this version
+already creates the new directories, and `mv dir dir` would bury your config inside them:
 
 ```bash
-mv ~/.config/mediagen-cli ~/.config/mediagen
-mv ~/.local/state/mediagen-cli ~/.local/state/mediagen
+mkdir -p ~/.config/mediagen ~/.local/state/mediagen
+mv ~/.config/mediagen-cli/config.toml ~/.config/mediagen/config.toml
+mv ~/.local/state/mediagen-cli/auth.json ~/.local/state/mediagen/auth.json
 ```
 
-(With `XDG_CONFIG_HOME` or `XDG_STATE_HOME` set, move the `mediagen-cli` directory inside
-those instead. If you set `MEDIAGEN_CLI_CONFIG_DIR` or `MEDIAGEN_CLI_STATE_DIR`, the names
-are unchanged and there is nothing to move.)
+(With `XDG_CONFIG_HOME` or `XDG_STATE_HOME` set, the paths are `<that>/mediagen-cli` →
+`<that>/mediagen` instead. If you set `MEDIAGEN_CLI_CONFIG_DIR` or
+`MEDIAGEN_CLI_STATE_DIR`, the names are unchanged and there is nothing to move. Skip a
+line whose `mediagen-cli` path does not exist — most users never had an `auth.json`.)
 
 ```toml
 default_provider = "volcengine"

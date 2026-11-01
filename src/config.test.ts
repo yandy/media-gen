@@ -92,6 +92,14 @@ describe("configDir", () => {
 
     expect(path.basename(configDir())).toBe(path.basename(stateDir()));
     expect(path.basename(configDir())).not.toMatch(/-cli$/);
+
+    // The $HOME fallbacks are a second pair of literals: an edit that renames one
+    // of them and not the other leaves two different directories behind.
+    delete process.env.XDG_CONFIG_HOME;
+    delete process.env.XDG_STATE_HOME;
+
+    expect(path.basename(configDir())).toBe(path.basename(stateDir()));
+    expect(path.basename(configDir())).not.toMatch(/-cli$/);
   });
 });
 

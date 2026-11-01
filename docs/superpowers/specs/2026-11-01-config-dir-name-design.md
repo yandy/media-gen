@@ -49,12 +49,20 @@ Unchanged, as a deliberate call:
 
 - `configDir()` and `stateDir()` name `mediagen` in all four branches (override, XDG,
   home).
-- The READMEs state the new paths, and each carries one copy-pasteable upgrade block:
+- The READMEs state the new paths, and each carries one copy-pasteable upgrade block that
+  moves the **files**, not the directories:
 
   ```
-  mv ~/.config/mediagen-cli ~/.config/mediagen
-  mv ~/.local/state/mediagen-cli ~/.local/state/mediagen
+  mkdir -p ~/.config/mediagen ~/.local/state/mediagen
+  mv ~/.config/mediagen-cli/config.toml ~/.config/mediagen/config.toml
+  mv ~/.local/state/mediagen-cli/auth.json ~/.local/state/mediagen/auth.json
   ```
+
+  Directory-level moves were the first draft and are wrong: a first run of the new version
+  has already created the destination, and `mv dir dir` then moves the old directory
+  *inside* it (exit 0, no warning), hiding the user's config one level deeper while the CLI
+  keeps reading the seed. The same applies to `~/.local/state` for anyone who re-ran
+  `login` before reading the note.
 
 - The test suite pins the new paths, so a future rename cannot land half-done.
 

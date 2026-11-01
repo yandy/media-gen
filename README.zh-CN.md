@@ -119,16 +119,19 @@ stdout 上每行打印一个绝对路径；`--json` 打印一个对象：
 仓库的目录，把密钥放在那里，一次 `.gitignore` 疏忽就等于泄露。state 目录按定义是
 「本机状态、不该被同步」，正合设备绑定的凭证。
 
-从 0.1.1 及更早版本升级：两个目录都去掉了 `-cli` 后缀，程序不会替你迁移。手动挪一次，
-然后随便跑一条命令即可：
+从 0.1.1 及更早版本升级：两个目录都去掉了 `-cli` 后缀，程序不会替你迁移。挪文件，别挪目录
+—— 新版本第一次运行就已经建好了新目录，`mv 目录 目录` 只会把你的配置埋进去：
 
 ```bash
-mv ~/.config/mediagen-cli ~/.config/mediagen
-mv ~/.local/state/mediagen-cli ~/.local/state/mediagen
+mkdir -p ~/.config/mediagen ~/.local/state/mediagen
+mv ~/.config/mediagen-cli/config.toml ~/.config/mediagen/config.toml
+mv ~/.local/state/mediagen-cli/auth.json ~/.local/state/mediagen/auth.json
 ```
 
-（设置了 `XDG_CONFIG_HOME` 或 `XDG_STATE_HOME` 的，改挪那两个目录下面的 `mediagen-cli`。
-用了 `MEDIAGEN_CLI_CONFIG_DIR` 或 `MEDIAGEN_CLI_STATE_DIR` 的，变量名没变，不需要动。）
+（设置了 `XDG_CONFIG_HOME` 或 `XDG_STATE_HOME` 的，路径相应改为 `<该目录>/mediagen-cli` →
+`<该目录>/mediagen`。用了 `MEDIAGEN_CLI_CONFIG_DIR` 或 `MEDIAGEN_CLI_STATE_DIR` 的，变量名
+没变，不需要动。`mediagen-cli` 路径不存在的那一行跳过就好 —— 大多数用户本来就没有
+`auth.json`。）
 
 ```toml
 default_provider = "volcengine"

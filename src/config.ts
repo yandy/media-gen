@@ -12,11 +12,11 @@ import type { Dialect, ProviderConfig, Task, TaskBinding } from "./types.js";
 
 
 /**
- * The one directory name both XDG locations use. Spelled once: the last rename
- * (`media-cli` → `mediagen-cli`) was a four-place edit, and config and state
+ * The one directory name every non-override location uses. Spelled once: the last
+ * rename (`media-cli` → `mediagen-cli`) was a four-place edit, and config and state
  * drifting apart would put a 0600 key store somewhere nobody looks.
  */
-export const APP_DIR_NAME = "mediagen";
+const APP_DIR_NAME = "mediagen";
 
 export function configDir(): string {
   const override = process.env.MEDIAGEN_CLI_CONFIG_DIR;
