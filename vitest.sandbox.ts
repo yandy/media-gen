@@ -17,8 +17,8 @@ import { afterAll } from "vitest";
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "mediagen-test-home-"));
 process.env.HOME = sandbox;
 process.env.XDG_CONFIG_HOME = path.join(sandbox, "xdg");
-process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(sandbox, "mediagen-cli");
-process.env.MEDIAGEN_CLI_STATE_DIR = path.join(sandbox, "mediagen-cli-state");
+process.env.MEDIAGEN_CLI_CONFIG_DIR = path.join(sandbox, "mediagen");
+process.env.MEDIAGEN_CLI_STATE_DIR = path.join(sandbox, "mediagen-state");
 
 const repoRoot = process.cwd();
 const before = new Set(fs.readdirSync(repoRoot));

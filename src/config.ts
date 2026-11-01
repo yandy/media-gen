@@ -11,14 +11,21 @@ import { adapterPath, getAdapter } from "./api/index.js";
 import type { Dialect, ProviderConfig, Task, TaskBinding } from "./types.js";
 
 
+/**
+ * The one directory name both XDG locations use. Spelled once: the last rename
+ * (`media-cli` → `mediagen-cli`) was a four-place edit, and config and state
+ * drifting apart would put a 0600 key store somewhere nobody looks.
+ */
+export const APP_DIR_NAME = "mediagen";
+
 export function configDir(): string {
   const override = process.env.MEDIAGEN_CLI_CONFIG_DIR;
   if (override) return override;
 
   const xdgConfigHome = process.env.XDG_CONFIG_HOME;
-  if (xdgConfigHome) return path.join(xdgConfigHome, "mediagen-cli");
+  if (xdgConfigHome) return path.join(xdgConfigHome, APP_DIR_NAME);
 
-  return path.join(os.homedir(), ".config", "mediagen-cli");
+  return path.join(os.homedir(), ".config", APP_DIR_NAME);
 }
 
 /**
@@ -33,9 +40,9 @@ export function stateDir(): string {
   if (override) return override;
 
   const xdgStateHome = process.env.XDG_STATE_HOME;
-  if (xdgStateHome) return path.join(xdgStateHome, "mediagen-cli");
+  if (xdgStateHome) return path.join(xdgStateHome, APP_DIR_NAME);
 
-  return path.join(os.homedir(), ".local", "state", "mediagen-cli");
+  return path.join(os.homedir(), ".local", "state", APP_DIR_NAME);
 }
 
 export function configPath(): string {

@@ -11,6 +11,7 @@ import {
   MAX_TIMEOUT_SECONDS,
   prepareConfigFile,
   resolveSelection,
+  stateDir,
   validateProviderShape,
   type TaskConfig,
 } from "./config.js";
@@ -18,7 +19,9 @@ import { ConfigError } from "./errors.js";
 
 const originalEnv = {
   MEDIAGEN_CLI_CONFIG_DIR: process.env.MEDIAGEN_CLI_CONFIG_DIR,
+  MEDIAGEN_CLI_STATE_DIR: process.env.MEDIAGEN_CLI_STATE_DIR,
   XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  XDG_STATE_HOME: process.env.XDG_STATE_HOME,
   HOME: process.env.HOME,
 };
 
@@ -69,7 +72,7 @@ describe("configDir", () => {
     const xdgHome = path.join(tempDir, "xdg");
     process.env.XDG_CONFIG_HOME = xdgHome;
 
-    expect(configDir()).toBe(path.join(xdgHome, "mediagen-cli"));
+    expect(configDir()).toBe(path.join(xdgHome, "mediagen"));
   });
 
   it("falls back to ~/.config when XDG_CONFIG_HOME is unset", () => {
@@ -78,7 +81,17 @@ describe("configDir", () => {
     const home = path.join(tempDir, "home");
     process.env.HOME = home;
 
-    expect(configDir()).toBe(path.join(home, ".config", "mediagen-cli"));
+    expect(configDir()).toBe(path.join(home, ".config", "mediagen"));
+  });
+
+  it("names the config and state directories the same, so they cannot drift", () => {
+    delete process.env.MEDIAGEN_CLI_CONFIG_DIR;
+    delete process.env.MEDIAGEN_CLI_STATE_DIR;
+    process.env.XDG_CONFIG_HOME = path.join(tempDir, "xdg");
+    process.env.XDG_STATE_HOME = path.join(tempDir, "xdg-state");
+
+    expect(path.basename(configDir())).toBe(path.basename(stateDir()));
+    expect(path.basename(configDir())).not.toMatch(/-cli$/);
   });
 });
 
